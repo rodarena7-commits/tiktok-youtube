@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: tiktok-youtube
+    env: node
+    buildCommand: pip install yt-dlp && npm install
+    startCommand: node server.js
+    envVars:
+      - key: UPLOAD_PASSWORD
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REDIRECT_URI
+        sync: false
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
