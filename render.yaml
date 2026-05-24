@@ -5,13 +5,37 @@ services:
     buildCommand: pip install yt-dlp && npm install
     startCommand: node server.js
     envVars:
+      # Contraseña para el panel web
       - key: UPLOAD_PASSWORD
         sync: false
+
+      # Google OAuth (obtenelos en console.cloud.google.com)
       - key: YOUTUBE_CLIENT_ID
         sync: false
       - key: YOUTUBE_CLIENT_SECRET
         sync: false
       - key: YOUTUBE_REDIRECT_URI
         sync: false
+      # Se obtiene visitando /auth después del deploy
       - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
+
+      # ── Auto-upload de mrbeats ──────────────────────────────
+      # Usuario de TikTok a monitorear (sin @)
+      - key: TIKTOK_USERNAME
+        value: mrbeats
+      # Cada cuántas horas revisar TikTok (mínimo 1)
+      - key: AUTO_INTERVAL_HOURS
+        value: "6"
+      # Máximo de videos a subir por ejecución
+      - key: MAX_VIDEOS_PER_RUN
+        value: "5"
+      # Privacidad de los videos subidos: public | unlisted | private
+      - key: AUTO_PRIVACY
+        value: public
+      # Tags separados por coma (se agregan a todos los videos)
+      - key: AUTO_TAGS
+        value: "mrbeats,beats,tiktok,shorts,música"
+      # Texto extra al final de cada descripción (opcional)
+      - key: AUTO_DESCRIPTION
         sync: false

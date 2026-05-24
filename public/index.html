@@ -3,11 +3,22 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>TikTok → YouTube</title>
+  <title>TikTok → YouTube · mrbeats</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f0f0f;color:#f1f1f1;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}
-    .card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:20px;padding:2rem;width:100%;max-width:520px;box-shadow:0 20px 60px rgba(0,0,0,0.5)}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f0f0f;color:#f1f1f1;min-height:100vh;padding:1rem}
+
+    .container{max-width:600px;margin:0 auto}
+
+    /* Tabs */
+    .tabs{display:flex;gap:0.5rem;margin-bottom:1.5rem}
+    .tab-btn{flex:1;padding:0.65rem 1rem;border:1px solid #2a2a2a;border-radius:10px;background:#1a1a1a;color:#888;font-size:0.85rem;font-weight:600;cursor:pointer;transition:all 0.2s}
+    .tab-btn.active{background:#ff0050;border-color:#ff0050;color:#fff}
+    .tab-content{display:none}
+    .tab-content.active{display:block}
+
+    .card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:20px;padding:1.75rem;box-shadow:0 20px 60px rgba(0,0,0,0.5)}
+
     .logo{display:flex;align-items:center;gap:0.75rem;margin-bottom:1.5rem}
     .logo-icon{width:44px;height:44px;background:linear-gradient(135deg,#ff0050,#ff3e81);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;flex-shrink:0}
     .logo-title{font-size:1.25rem;font-weight:700;color:#fff}
@@ -27,6 +38,9 @@
     .btn-main{background:linear-gradient(135deg,#ff0050,#c8003a);color:#fff}
     .btn-main:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(255,0,80,0.4)}
     .btn-main:disabled{opacity:0.5;transform:none;cursor:not-allowed}
+    .btn-secondary{background:#1f1f1f;color:#ccc;border:1px solid #2a2a2a;font-size:0.9rem}
+    .btn-secondary:hover:not(:disabled){border-color:#ff0050;color:#ff0050}
+    .btn-secondary:disabled{opacity:0.5;cursor:not-allowed}
     .btn-meta{background:#1f1f1f;color:#aaa;border:1px solid #2a2a2a;font-size:0.8rem;padding:0.5rem;border-radius:8px;width:auto;margin-top:0;margin-left:auto;display:block}
     .btn-meta:hover{border-color:#ff0050;color:#ff0050}
 
@@ -49,86 +63,327 @@
     .password-toggle{position:relative}
     .password-toggle input{padding-right:2.5rem}
     .eye-btn{position:absolute;right:0.75rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#555;cursor:pointer;font-size:1rem}
+
+    /* Auto tab */
+    .status-card{background:#111;border:1px solid #2a2a2a;border-radius:14px;padding:1rem 1.25rem;margin-bottom:1rem}
+    .status-row{display:flex;align-items:center;justify-content:space-between;font-size:0.85rem;margin-bottom:0.4rem}
+    .status-row:last-child{margin-bottom:0}
+    .badge{display:inline-flex;align-items:center;gap:0.3rem;padding:0.2rem 0.6rem;border-radius:20px;font-size:0.75rem;font-weight:600}
+    .badge-green{background:#052e16;color:#4ade80;border:1px solid #166534}
+    .badge-yellow{background:#2d1d04;color:#fbbf24;border:1px solid #92400e}
+    .badge-red{background:#2d0a0a;color:#f87171;border:1px solid #7f1d1d}
+    .badge-gray{background:#1f1f1f;color:#888;border:1px solid #2a2a2a}
+
+    .log-box{background:#080808;border:1px solid #1a1a1a;border-radius:10px;padding:0.75rem;max-height:180px;overflow-y:auto;font-family:monospace;font-size:0.75rem;color:#6b7280;margin-top:0.75rem;display:none}
+    .log-box.show{display:block}
+    .log-line{padding:0.1rem 0;border-bottom:1px solid #111;line-height:1.5}
+    .log-line:last-child{border-bottom:none}
+    .log-ok{color:#4ade80}
+    .log-err{color:#f87171}
+    .log-info{color:#60a5fa}
+
+    /* History */
+    .history-item{display:flex;gap:0.75rem;padding:0.75rem 0;border-bottom:1px solid #1f1f1f;align-items:flex-start}
+    .history-item:last-child{border-bottom:none}
+    .history-thumb{width:50px;height:70px;background:#111;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.2rem}
+    .history-info{flex:1;min-width:0}
+    .history-title{font-size:0.85rem;font-weight:600;color:#f1f1f1;line-clamp:2;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+    .history-meta{font-size:0.72rem;color:#555;margin-top:0.25rem}
+    .history-link{font-size:0.72rem;color:#ff0000;text-decoration:none;font-weight:600;margin-top:0.25rem;display:block}
+    .history-link:hover{text-decoration:underline}
+    .empty-state{text-align:center;padding:2rem;color:#555;font-size:0.85rem}
+
+    .section-title{font-size:0.75rem;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.75rem}
   </style>
 </head>
 <body>
-<div class="card">
+<div class="container">
 
-  <div class="logo">
+  <div class="logo" style="margin-bottom:1rem;margin-top:0.5rem">
     <div class="logo-icon">🎵</div>
     <div>
       <div class="logo-title">TikTok <span class="arrow">→</span> <span class="yt-clr">YouTube</span></div>
-      <div class="logo-sub">Descargá y subí automáticamente</div>
+      <div class="logo-sub" id="usernameLabel">Cargando...</div>
     </div>
   </div>
 
-  <div class="field">
-    <label>Contraseña</label>
-    <div class="password-toggle">
-      <input type="password" id="password" placeholder="••••••••" autocomplete="current-password"/>
-      <button class="eye-btn" type="button" onclick="togglePwd()">👁</button>
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('auto')">⚡ Auto</button>
+    <button class="tab-btn" onclick="switchTab('manual')">✏️ Manual</button>
+    <button class="tab-btn" onclick="switchTab('history')">📋 Historial</button>
+  </div>
+
+  <!-- ── TAB AUTO ─────────────────────────────────────────── -->
+  <div id="tab-auto" class="tab-content active">
+    <div class="card">
+
+      <p class="section-title">Estado del scheduler</p>
+      <div class="status-card" id="schedulerCard">
+        <div class="status-row">
+          <span style="color:#888">Canal TikTok</span>
+          <span id="autoUsername" style="color:#f1f1f1;font-weight:600">—</span>
+        </div>
+        <div class="status-row">
+          <span style="color:#888">YouTube</span>
+          <span id="autoYtStatus">—</span>
+        </div>
+        <div class="status-row">
+          <span style="color:#888">Scheduler</span>
+          <span id="autoRunning">—</span>
+        </div>
+        <div class="status-row">
+          <span style="color:#888">Frecuencia</span>
+          <span id="autoInterval" style="color:#888">—</span>
+        </div>
+        <div class="status-row">
+          <span style="color:#888">Última ejecución</span>
+          <span id="autoLastRun" style="color:#888;font-size:0.78rem">—</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Contraseña</label>
+        <div class="password-toggle">
+          <input type="password" id="autoPassword" placeholder="••••••••"/>
+          <button class="eye-btn" type="button" onclick="togglePwd('autoPassword')">👁</button>
+        </div>
+      </div>
+
+      <button class="btn btn-main" id="runAutoBtn" onclick="runAuto()">
+        ▶ Ejecutar ahora
+      </button>
+
+      <div class="log-box" id="autoLogBox"></div>
+
+      <div class="divider"></div>
+      <div class="auth-link">
+        Primera vez? → <a href="/auth" target="_blank">Autenticar canal de YouTube</a>
+      </div>
     </div>
   </div>
 
-  <div class="field">
-    <label>URL del video de TikTok</label>
-    <div style="display:flex;gap:0.5rem;align-items:flex-start">
-      <input type="url" id="tiktokUrl" placeholder="https://www.tiktok.com/@usuario/video/..." style="flex:1"/>
-      <button class="btn btn-meta" onclick="loadMeta()" id="metaBtn">Cargar info</button>
+  <!-- ── TAB MANUAL ──────────────────────────────────────── -->
+  <div id="tab-manual" class="tab-content">
+    <div class="card">
+
+      <div class="field">
+        <label>Contraseña</label>
+        <div class="password-toggle">
+          <input type="password" id="password" placeholder="••••••••" autocomplete="current-password"/>
+          <button class="eye-btn" type="button" onclick="togglePwd('password')">👁</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>URL del video de TikTok</label>
+        <div style="display:flex;gap:0.5rem;align-items:flex-start">
+          <input type="url" id="tiktokUrl" placeholder="https://www.tiktok.com/@usuario/video/..." style="flex:1"/>
+          <button class="btn btn-meta" onclick="loadMeta()" id="metaBtn">Cargar info</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Título en YouTube</label>
+        <input type="text" id="title" placeholder="Título del video" maxlength="100"/>
+      </div>
+
+      <div class="field">
+        <label>Descripción</label>
+        <textarea id="description" placeholder="Descripción del video (opcional)..."></textarea>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Tags (separados por coma)</label>
+          <input type="text" id="tags" placeholder="tiktok, viral, humor"/>
+        </div>
+        <div class="field">
+          <label>Privacidad</label>
+          <select id="privacy">
+            <option value="public">🌐 Público</option>
+            <option value="unlisted">🔗 No listado</option>
+            <option value="private">🔒 Privado</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn btn-main" id="uploadBtn" onclick="startUpload()">
+        ▶ Subir a YouTube
+      </button>
+
+      <div class="progress-box" id="progressBox">
+        <div class="status-icon" id="statusIcon">⏳</div>
+        <div class="progress-label">
+          <span id="statusText">Iniciando...</span>
+          <span id="pctText">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div id="resultArea"></div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="auth-link">
+        Primera vez? → <a href="/auth" target="_blank">Autenticar canal de YouTube</a>
+      </div>
     </div>
   </div>
 
-  <div class="field">
-    <label>Título en YouTube</label>
-    <input type="text" id="title" placeholder="Título del video" maxlength="100"/>
-  </div>
-
-  <div class="field">
-    <label>Descripción</label>
-    <textarea id="description" placeholder="Descripción del video (opcional)..."></textarea>
-  </div>
-
-  <div class="row">
-    <div class="field">
-      <label>Tags (separados por coma)</label>
-      <input type="text" id="tags" placeholder="tiktok, viral, humor"/>
-    </div>
-    <div class="field">
-      <label>Privacidad</label>
-      <select id="privacy">
-        <option value="public">🌐 Público</option>
-        <option value="unlisted">🔗 No listado</option>
-        <option value="private">🔒 Privado</option>
-      </select>
+  <!-- ── TAB HISTORIAL ───────────────────────────────────── -->
+  <div id="tab-history" class="tab-content">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <p class="section-title" style="margin-bottom:0">Videos subidos automáticamente</p>
+        <span id="historyCount" style="font-size:0.75rem;color:#555">—</span>
+      </div>
+      <div id="historyList">
+        <div class="empty-state">Cargando historial...</div>
+      </div>
     </div>
   </div>
 
-  <button class="btn btn-main" id="uploadBtn" onclick="startUpload()">
-    ▶ Subir a YouTube
-  </button>
-
-  <!-- Progress box -->
-  <div class="progress-box" id="progressBox">
-    <div class="status-icon" id="statusIcon">⏳</div>
-    <div class="progress-label">
-      <span id="statusText">Iniciando...</span>
-      <span id="pctText">0%</span>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    <div id="resultArea"></div>
-  </div>
-
-  <div class="divider"></div>
-  <div class="auth-link">
-    Primera vez? → <a href="/auth" target="_blank">Autenticar canal de YouTube</a>
-  </div>
 </div>
 
 <script>
   let pollInterval = null
+  let autoRefreshInterval = null
 
-  function togglePwd() {
-    const inp = document.getElementById('password')
+  // ── Tabs ─────────────────────────────────────────────────
+  function switchTab(tab) {
+    document.querySelectorAll('.tab-btn').forEach((b, i) => {
+      const keys = ['auto', 'manual', 'history']
+      b.classList.toggle('active', keys[i] === tab)
+    })
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'))
+    document.getElementById(`tab-${tab}`).classList.add('active')
+
+    if (tab === 'auto')    { loadSchedulerStatus(); startAutoRefresh() }
+    if (tab === 'history') { loadHistory(); stopAutoRefresh() }
+    if (tab === 'manual')  { stopAutoRefresh() }
+  }
+
+  // ── Scheduler status ──────────────────────────────────────
+  async function loadSchedulerStatus() {
+    try {
+      const res = await fetch('/auto/status')
+      const s = await res.json()
+
+      document.getElementById('usernameLabel').textContent = `@${s.tiktokUsername}`
+      document.getElementById('autoUsername').textContent  = `@${s.tiktokUsername}`
+      document.getElementById('autoInterval').textContent  = `Cada ${s.intervalHours}h`
+
+      document.getElementById('autoYtStatus').innerHTML = s.ytConfigured
+        ? '<span class="badge badge-green">✅ Conectado</span>'
+        : '<span class="badge badge-red">❌ No autenticado</span>'
+
+      document.getElementById('autoRunning').innerHTML = s.running
+        ? '<span class="badge badge-yellow">⏳ En curso...</span>'
+        : (s.ytConfigured
+            ? '<span class="badge badge-green">✅ Activo</span>'
+            : '<span class="badge badge-gray">⏸ Pausado</span>')
+
+      if (s.lastRunAt) {
+        const d = new Date(s.lastRunAt)
+        document.getElementById('autoLastRun').textContent = d.toLocaleString('es-AR')
+      }
+
+      // Mostrar logs de la última ejecución
+      if (s.lastRunResult?.logs?.length) {
+        showAutoLogs(s.lastRunResult.logs)
+      }
+    } catch {}
+  }
+
+  function startAutoRefresh() {
+    loadSchedulerStatus()
+    autoRefreshInterval = setInterval(loadSchedulerStatus, 5000)
+  }
+
+  function stopAutoRefresh() {
+    if (autoRefreshInterval) { clearInterval(autoRefreshInterval); autoRefreshInterval = null }
+  }
+
+  // ── Forzar ejecución auto ──────────────────────────────────
+  async function runAuto() {
+    const password = document.getElementById('autoPassword').value
+    if (!password) return alert('Ingresá la contraseña')
+
+    const btn = document.getElementById('runAutoBtn')
+    btn.disabled = true
+    btn.textContent = 'Iniciando...'
+
+    try {
+      const res = await fetch('/auto/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      btn.textContent = '⏳ Ejecutando en segundo plano...'
+      startAutoRefresh()
+    } catch (e) {
+      alert('Error: ' + e.message)
+      btn.disabled = false
+      btn.textContent = '▶ Ejecutar ahora'
+    }
+    // Re-habilitar después de 10s
+    setTimeout(() => {
+      btn.disabled = false
+      btn.textContent = '▶ Ejecutar ahora'
+    }, 10000)
+  }
+
+  function showAutoLogs(logs) {
+    const box = document.getElementById('autoLogBox')
+    box.classList.add('show')
+    box.innerHTML = logs.map(l => {
+      let cls = 'log-line'
+      if (l.msg.includes('✅') || l.msg.includes('Subido')) cls += ' log-ok'
+      else if (l.msg.includes('❌') || l.msg.includes('Error')) cls += ' log-err'
+      else if (l.msg.includes('⬆️') || l.msg.includes('⬇️') || l.msg.includes('🔍')) cls += ' log-info'
+      const time = new Date(l.time).toLocaleTimeString('es-AR')
+      return `<div class="${cls}">[${time}] ${l.msg}</div>`
+    }).join('')
+    box.scrollTop = box.scrollHeight
+  }
+
+  // ── Historial ────────────────────────────────────────────
+  async function loadHistory() {
+    const list = document.getElementById('historyList')
+    try {
+      const res  = await fetch('/auto/history')
+      const data = await res.json()
+
+      document.getElementById('historyCount').textContent = `${data.total} video${data.total !== 1 ? 's' : ''}`
+
+      if (data.total === 0) {
+        list.innerHTML = '<div class="empty-state">📭 Todavía no se subió ningún video automáticamente</div>'
+        return
+      }
+
+      list.innerHTML = data.videos.map(v => {
+        const date = new Date(v.uploadedAt).toLocaleDateString('es-AR', { day:'2-digit', month:'short', year:'numeric' })
+        const time = new Date(v.uploadedAt).toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' })
+        return `
+          <div class="history-item">
+            <div class="history-thumb">🎵</div>
+            <div class="history-info">
+              <div class="history-title">${escHtml(v.title)}</div>
+              <div class="history-meta">TikTok ID: ${v.tiktokId} · ${date} ${time}</div>
+              <a class="history-link" href="${v.youtubeUrl}" target="_blank">▶ Ver en YouTube →</a>
+            </div>
+          </div>
+        `
+      }).join('')
+    } catch {
+      list.innerHTML = '<div class="empty-state">❌ No se pudo cargar el historial</div>'
+    }
+  }
+
+  // ── Subida manual ─────────────────────────────────────────
+  function togglePwd(id) {
+    const inp = document.getElementById(id)
     inp.type = inp.type === 'password' ? 'text' : 'password'
   }
 
@@ -136,11 +391,9 @@
     const password = document.getElementById('password').value
     const url = document.getElementById('tiktokUrl').value.trim()
     if (!password || !url) return alert('Ingresá contraseña y URL primero')
-
     const btn = document.getElementById('metaBtn')
     btn.textContent = 'Cargando...'
     btn.disabled = true
-
     try {
       const res = await fetch('/meta', {
         method: 'POST',
@@ -149,7 +402,7 @@
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      if (data.title) document.getElementById('title').value = data.title
+      if (data.title)    document.getElementById('title').value = data.title
       if (data.uploader) document.getElementById('description').value = `Video original de @${data.uploader} en TikTok.`
     } catch (e) {
       alert('Error: ' + e.message)
@@ -160,22 +413,18 @@
   }
 
   async function startUpload() {
-    const password = document.getElementById('password').value
-    const url = document.getElementById('tiktokUrl').value.trim()
-    const title = document.getElementById('title').value.trim()
+    const password    = document.getElementById('password').value
+    const url         = document.getElementById('tiktokUrl').value.trim()
+    const title       = document.getElementById('title').value.trim()
     const description = document.getElementById('description').value.trim()
-    const tags = document.getElementById('tags').value.trim()
-    const privacy = document.getElementById('privacy').value
-
+    const tags        = document.getElementById('tags').value.trim()
+    const privacy     = document.getElementById('privacy').value
     if (!password) return alert('Ingresá la contraseña')
-    if (!url) return alert('Ingresá la URL de TikTok')
-
+    if (!url)      return alert('Ingresá la URL de TikTok')
     const btn = document.getElementById('uploadBtn')
     btn.disabled = true
     btn.textContent = 'Procesando...'
-
     showProgress('downloading', 0)
-
     try {
       const res = await fetch('/upload', {
         method: 'POST',
@@ -198,9 +447,8 @@
       try {
         const res = await fetch(`/status/${jobId}`)
         const job = await res.json()
-
         if (job.status === 'downloading') showProgress('downloading', job.progress)
-        if (job.status === 'uploading') showProgress('uploading', job.progress)
+        if (job.status === 'uploading')   showProgress('uploading',   job.progress)
         if (job.status === 'done') {
           clearInterval(pollInterval)
           showDone(job.videoUrl)
@@ -222,7 +470,6 @@
     document.getElementById('progressFill').style.width = pct + '%'
     document.getElementById('pctText').textContent = pct + '%'
     document.getElementById('resultArea').innerHTML = ''
-
     if (stage === 'downloading') {
       document.getElementById('statusIcon').textContent = '⬇️'
       document.getElementById('statusText').textContent = 'Descargando video de TikTok...'
@@ -246,8 +493,16 @@
     document.getElementById('progressBox').classList.add('show')
     document.getElementById('statusIcon').textContent = '❌'
     document.getElementById('statusText').textContent = 'Error'
-    document.getElementById('resultArea').innerHTML = `<p class="error-text">${msg}</p>`
+    document.getElementById('resultArea').innerHTML = `<p class="error-text">${escHtml(msg)}</p>`
   }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+  }
+
+  // ── Init ──────────────────────────────────────────────────
+  loadSchedulerStatus()
+  startAutoRefresh()
 </script>
 </body>
 </html>

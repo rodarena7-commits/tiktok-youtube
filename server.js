@@ -3,6 +3,7 @@ const fs = require('fs')
 const path = require('path')
 const { getAuthUrl, handleCallback, uploadToYoutube } = require('./youtube')
 const { downloadTikTok, getTikTokMeta, getTempPath } = require('./downloader')
+const { startScheduler, triggerRun, getSchedulerStatus, loadHistory } = require('./scheduler')
 
 const app = express()
 app.use(express.json())
@@ -61,7 +62,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 })
 
-// ── Obtener metadatos del TikTok ────────────────────────────
+// ── Obtener metadatos del TikTok (subida manual) ────────────
 app.post('/meta', async (req, res) => {
   const { password, url } = req.body
   if (password !== UPLOAD_PASSWORD) return res.status(401).json({ error: 'Contraseña incorrecta' })
@@ -70,7 +71,7 @@ app.post('/meta', async (req, res) => {
   res.json(meta || {})
 })
 
-// ── Iniciar descarga + subida ───────────────────────────────
+// ── Iniciar descarga + subida manual ───────────────────────
 app.post('/upload', async (req, res) => {
   const { password, url, title, description, tags, privacy } = req.body
   if (password !== UPLOAD_PASSWORD) return res.status(401).json({ error: 'Contraseña incorrecta' })
@@ -81,19 +82,14 @@ app.post('/upload', async (req, res) => {
 
   const jobId = Date.now().toString()
   jobs.set(jobId, { status: 'downloading', progress: 0, error: null, videoUrl: null })
-
-  // Responde inmediatamente con el jobId
   res.json({ jobId })
 
-  // Procesa en background
   const videoPath = getTempPath(jobId)
   ;(async () => {
     try {
-      // 1. Descargar
       jobs.set(jobId, { status: 'downloading', progress: 0, error: null, videoUrl: null })
       await downloadTikTok(url, videoPath)
 
-      // 2. Subir a YouTube
       jobs.set(jobId, { status: 'uploading', progress: 0, error: null, videoUrl: null })
       const tagList = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : []
 
@@ -111,34 +107,64 @@ app.post('/upload', async (req, res) => {
 
       const videoUrl = `https://www.youtube.com/watch?v=${result.id}`
       jobs.set(jobId, { status: 'done', progress: 100, error: null, videoUrl })
-      console.log(`✅ Subido: ${title} → ${videoUrl}`)
+      console.log(`✅ Subido manualmente: ${title} → ${videoUrl}`)
 
     } catch (e) {
       console.error(`❌ Job ${jobId}: ${e.message}`)
       jobs.set(jobId, { status: 'error', progress: 0, error: e.message, videoUrl: null })
     } finally {
-      // Limpiar archivo temporal
       try { if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath) } catch {}
-      // Borrar job después de 10 minutos
       setTimeout(() => jobs.delete(jobId), 10 * 60 * 1000)
     }
   })()
 })
 
-// ── Consultar estado del job ────────────────────────────────
+// ── Estado de un job de subida manual ──────────────────────
 app.get('/status/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId)
   if (!job) return res.status(404).json({ error: 'Job no encontrado' })
   res.json(job)
 })
 
+// ── Auto-upload: estado del scheduler ──────────────────────
+app.get('/auto/status', (req, res) => {
+  res.json(getSchedulerStatus())
+})
+
+// ── Auto-upload: forzar ejecución manual ────────────────────
+app.post('/auto/run', (req, res) => {
+  const { password } = req.body
+  if (password !== UPLOAD_PASSWORD) return res.status(401).json({ error: 'Contraseña incorrecta' })
+  const result = triggerRun('manual')
+  if (result.error) return res.status(409).json(result)
+  res.json({ ok: true, message: 'Auto-upload iniciado en segundo plano' })
+})
+
+// ── Auto-upload: historial de videos subidos ────────────────
+app.get('/auto/history', (req, res) => {
+  const history = loadHistory()
+  // Ordenar de más reciente a más antiguo
+  const sorted = [...history.uploaded].reverse()
+  res.json({ total: sorted.length, videos: sorted })
+})
+
 // ── Health check ────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
-    ok: true,
-    ytConfigured: !!process.env.YOUTUBE_REFRESH_TOKEN,
-    clientConfigured: !!process.env.YOUTUBE_CLIENT_ID,
+    ok:              true,
+    ytConfigured:    !!process.env.YOUTUBE_REFRESH_TOKEN,
+    clientConfigured:!!process.env.YOUTUBE_CLIENT_ID,
+    tiktokUsername:  process.env.TIKTOK_USERNAME || 'mrbeats',
+    schedulerActive: !!process.env.YOUTUBE_REFRESH_TOKEN,
   })
 })
 
-app.listen(PORT, () => console.log(`🚀 TikTok→YouTube en http://localhost:${PORT}`))
+app.listen(PORT, () => {
+  console.log(`🚀 TikTok→YouTube en http://localhost:${PORT}`)
+  // Arrancar el scheduler solo si YouTube está configurado
+  if (process.env.YOUTUBE_REFRESH_TOKEN) {
+    startScheduler()
+  } else {
+    console.log('⚠️  Scheduler pausado — falta YOUTUBE_REFRESH_TOKEN. Autenticá en /auth')
+  }
+})
