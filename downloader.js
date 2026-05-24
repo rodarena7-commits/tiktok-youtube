@@ -16,12 +16,17 @@ function cookiesArg() {
   return `--cookies "${p}"`
 }
 
-const UA = '--add-header "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"'
-
 // Obtiene metadatos del video sin descargar
 async function getTikTokMeta(url) {
   return new Promise((resolve) => {
-    const cmd = `yt-dlp --dump-json --no-playlist ${cookiesArg()} ${UA} "${url}"`
+    const cmd = [
+      'yt-dlp',
+      '--dump-json',
+      '--no-playlist',
+      '--impersonate chrome',
+      cookiesArg(),
+      `"${url}"`,
+    ].filter(Boolean).join(' ')
     exec(cmd, { timeout: 30000 }, (err, stdout) => {
       if (err) return resolve(null)
       try {
@@ -44,8 +49,8 @@ async function downloadTikTok(url, outputPath) {
       `-o "${outputPath}"`,
       '--no-playlist',
       '--merge-output-format mp4',
+      '--impersonate chrome',
       cookiesArg(),
-      UA,
       `"${url}"`,
     ].filter(Boolean).join(' ')
 
