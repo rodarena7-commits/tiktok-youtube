@@ -14,13 +14,14 @@ const https = require('https')
 const http  = require('http')
 const fs    = require('fs')
 const path  = require('path')
+const zlib  = require('zlib')
 const { downloadTikTok, getTempPath } = require('./downloader')
 const { uploadToYoutube } = require('./youtube')
 
 const HISTORY_FILE = path.join(__dirname, 'uploaded.json')
 
-// ── Petición GET con JSON ──────────────────────────────────
-function fetchJson(url) {
+// ── Petición GET → JSON (con headers extra opcionales) ─────
+function fetchJson(url, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http
     const req = client.get(url, {
@@ -29,10 +30,11 @@ function fetchJson(url) {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Referer': 'https://www.tikwm.com/',
+        ...extraHeaders,
       }
     }, res => {
       if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
-        return fetchJson(res.headers.location).then(resolve).catch(reject)
+        return fetchJson(res.headers.location, extraHeaders).then(resolve).catch(reject)
       }
       let data = ''
       res.on('data', c => data += c)
@@ -40,7 +42,6 @@ function fetchJson(url) {
         try {
           resolve(JSON.parse(data))
         } catch {
-          // Mostrar los primeros 300 chars de la respuesta para debug
           reject(new Error(`Respuesta no JSON (HTTP ${res.statusCode}): ${data.slice(0, 300)}`))
         }
       })
@@ -48,6 +49,38 @@ function fetchJson(url) {
     req.on('error', reject)
     req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')) })
     req.end()
+  })
+}
+
+// ── Fetch de HTML/texto con descompresión gzip/deflate ─────
+function fetchText(url, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http
+    const req = client.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate',
+        ...extraHeaders,
+      }
+    }, res => {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+        return fetchText(res.headers.location, extraHeaders).then(resolve).catch(reject)
+      }
+      const chunks = []
+      res.on('data', c => chunks.push(c))
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks)
+        const enc = (res.headers['content-encoding'] || '').toLowerCase()
+        const done = (err, d) => err ? reject(err) : resolve(d.toString('utf8'))
+        if (enc === 'gzip')    zlib.gunzip(buf, done)
+        else if (enc === 'deflate') zlib.inflate(buf, done)
+        else resolve(buf.toString('utf8'))
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')) })
   })
 }
 
@@ -61,10 +94,151 @@ function saveHistory(history) {
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2))
 }
 
-// ── Obtener lista de videos del perfil — con 3 APIs de respaldo ─
+// ── Método A: Scraping directo de tiktok.com ──────────────
+async function fetchTikTokDirect(username, limit) {
+  const html = await fetchText(`https://www.tiktok.com/@${username}?lang=en`)
+
+  if (html.includes('Just a moment') || html.includes('cf-browser-verification')) {
+    throw new Error('Cloudflare challenge en tiktok.com')
+  }
+
+  // SIGI_STATE (formato actual de TikTok)
+  const m1 = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/)
+  if (m1) {
+    const state = JSON.parse(m1[1])
+    const items = Object.values(state.ItemModule || {})
+    if (items.length > 0) {
+      console.log(`✅ Fuente: tiktok.com SIGI_STATE (${items.length} videos)`)
+      return items.slice(0, limit).map(v => ({
+        id:          v.id,
+        webpage_url: `https://www.tiktok.com/@${username}/video/${v.id}`,
+        description: v.desc || '',
+        title:       v.desc || '',
+      }))
+    }
+  }
+
+  // __NEXT_DATA__ (formato anterior)
+  const m2 = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/)
+  if (m2) {
+    const nd = JSON.parse(m2[1])
+    const items = nd?.props?.pageProps?.items
+               || nd?.props?.pageProps?.videoData?.itemInfos
+               || []
+    if (items.length > 0) {
+      const videos = items.slice(0, limit).map(v => ({
+        id:          v.id || v.itemInfos?.id,
+        webpage_url: `https://www.tiktok.com/@${username}/video/${v.id || v.itemInfos?.id}`,
+        description: v.desc || v.itemInfos?.text || '',
+        title:       v.desc || v.itemInfos?.text || '',
+      })).filter(v => v.id)
+      if (videos.length > 0) {
+        console.log(`✅ Fuente: tiktok.com __NEXT_DATA__ (${videos.length} videos)`)
+        return videos
+      }
+    }
+  }
+
+  throw new Error(`Sin datos de video en HTML de TikTok (${html.length} chars)`)
+}
+
+// ── Método B: Proxitok RSS (instancias públicas) ───────────
+const PROXITOK_INSTANCES = [
+  'https://proxitok.pabloferreiro.es',
+  'https://tiktok.privacydev.net',
+  'https://tok.habedieeh.re',
+  'https://proxitok.heitkonig.net',
+]
+
+function parseRssVideos(xml, limit) {
+  const videos = []
+  const re = /<item>([\s\S]*?)<\/item>/g
+  let m
+  while ((m = re.exec(xml)) && videos.length < limit) {
+    const block = m[1]
+    const link  = (block.match(/<link>\s*(.*?)\s*<\/link>/)  || [])[1] || ''
+    const title = (block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || ''
+    const clean = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').trim()
+    const idMatch = link.match(/\/video\/(\d+)/)
+    if (idMatch) {
+      videos.push({
+        id:          idMatch[1],
+        webpage_url: link.split('?')[0],
+        description: clean(title),
+        title:       clean(title),
+      })
+    }
+  }
+  return videos
+}
+
+async function fetchTikTokProxitok(username, limit) {
+  const errors = []
+  for (const inst of PROXITOK_INSTANCES) {
+    try {
+      const xml = await fetchText(`${inst}/@${username}/rss`)
+      if (!xml.includes('<item')) throw new Error(`Respuesta no RSS (${xml.length} chars)`)
+      const videos = parseRssVideos(xml, limit)
+      if (videos.length > 0) {
+        console.log(`✅ Fuente: Proxitok ${inst} (${videos.length} videos)`)
+        return videos
+      }
+      throw new Error('Feed RSS vacío (0 items)')
+    } catch (e) {
+      errors.push(`${inst.replace('https://', '')}: ${e.message}`)
+    }
+  }
+  throw new Error(`Proxitok: ${errors.join(' | ')}`)
+}
+
+// ── Método C: RapidAPI tiktok-api23 (requiere RAPIDAPI_KEY) ─
+async function fetchTikTokRapidAPI(username, limit) {
+  const url = `https://tiktok-api23.p.rapidapi.com/api/user/posts?unique_id=${encodeURIComponent('@' + username)}&count=${limit}&cursor=0`
+  const data = await fetchJson(url, {
+    'x-rapidapi-key':  process.env.RAPIDAPI_KEY,
+    'x-rapidapi-host': 'tiktok-api23.p.rapidapi.com',
+  })
+  if (data.code === 0 && Array.isArray(data.data?.videos)) {
+    console.log(`✅ Fuente: RapidAPI (${data.data.videos.length} videos)`)
+    return data.data.videos.map(v => ({
+      id:          v.video_id || v.id,
+      webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id || v.id}`,
+      description: v.title || v.desc || '',
+      title:       v.title || v.desc || '',
+    }))
+  }
+  throw new Error(`RapidAPI: code=${data.code} msg=${data.msg || JSON.stringify(data).slice(0, 80)}`)
+}
+
+// ── Obtener lista de videos del perfil — 4 métodos de respaldo ─
 async function fetchProfileVideos(username, limit = 30) {
 
-  // Intento 1: TikWM /api/user/posts
+  // A: Scraping directo tiktok.com (gratis, sin clave)
+  try {
+    return await fetchTikTokDirect(username, limit)
+  } catch (e) {
+    console.log(`⚠️  TikTok directo: ${e.message}`)
+  }
+
+  // B: Proxitok RSS (gratis, sin clave)
+  try {
+    return await fetchTikTokProxitok(username, limit)
+  } catch (e) {
+    console.log(`⚠️  Proxitok: ${e.message}`)
+  }
+
+  // C: RapidAPI (si está configurado)
+  if (process.env.RAPIDAPI_KEY) {
+    try {
+      return await fetchTikTokRapidAPI(username, limit)
+    } catch (e) {
+      console.log(`⚠️  RapidAPI: ${e.message}`)
+    }
+  } else {
+    console.log('ℹ️  Sin RAPIDAPI_KEY — omitiendo RapidAPI (agregala en Render para mayor fiabilidad)')
+  }
+
+  // D: TikWM (fallback original, bloqueado por Cloudflare desde servidores cloud)
   try {
     const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0&web=1`
     const data = await fetchJson(url)
@@ -77,48 +251,16 @@ async function fetchProfileVideos(username, limit = 30) {
         title:       v.title || '',
       }))
     }
-    console.log(`⚠️  TikWM /api/user/posts: code=${data.code} msg=${data.msg}`)
+    console.log(`⚠️  TikWM: code=${data.code} msg=${data.msg}`)
   } catch (e) {
-    console.log(`⚠️  TikWM /api/user/posts falló: ${e.message}`)
+    console.log(`⚠️  TikWM: ${e.message}`)
   }
 
-  // Intento 2: TikWM /api/user/info + /api/user/posts sin web=1
-  try {
-    const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0`
-    const data = await fetchJson(url)
-    if (data.code === 0 && Array.isArray(data.data?.videos)) {
-      console.log('✅ Fuente: TikWM /api/user/posts (sin web=1)')
-      return data.data.videos.map(v => ({
-        id:          v.video_id,
-        webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
-        description: v.title || '',
-        title:       v.title || '',
-      }))
-    }
-    console.log(`⚠️  TikWM (sin web=1): code=${data.code} msg=${data.msg}`)
-  } catch (e) {
-    console.log(`⚠️  TikWM (sin web=1) falló: ${e.message}`)
-  }
-
-  // Intento 3: Sindry API (alternativa gratuita)
-  try {
-    const url  = `https://www.tikwm.com/api/user/mix?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0`
-    const data = await fetchJson(url)
-    if (data.code === 0 && Array.isArray(data.data?.videos)) {
-      console.log('✅ Fuente: TikWM /api/user/mix')
-      return data.data.videos.map(v => ({
-        id:          v.video_id,
-        webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
-        description: v.title || '',
-        title:       v.title || '',
-      }))
-    }
-    console.log(`⚠️  TikWM /api/user/mix: code=${data.code} msg=${data.msg}`)
-  } catch (e) {
-    console.log(`⚠️  TikWM /api/user/mix falló: ${e.message}`)
-  }
-
-  throw new Error('Todas las APIs de listado fallaron. Revisá los logs para detalles.')
+  throw new Error(
+    'Todas las fuentes de videos fallaron.\n' +
+    '  • Si los métodos gratuitos siguen fallando, configurá RAPIDAPI_KEY en Render.\n' +
+    '  • Registrarse en rapidapi.com → buscar "tiktok-api23" → copiar la API Key.'
+  )
 }
 
 // ── Lógica principal de auto-subida ─────────────────────────

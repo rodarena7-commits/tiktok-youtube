@@ -43,3 +43,10 @@ services:
       # Texto extra al final de cada descripción (opcional)
       - key: AUTO_DESCRIPTION
         sync: false
+
+      # ── Fuente de videos: RapidAPI (opcional pero recomendado) ──
+      # Si tiktok.com y Proxitok fallan desde Render, configurar esta clave.
+      # Registro gratuito en rapidapi.com → buscar "TikTok API" por "api23"
+      # Plan Basic: 500 req/mes gratis — suficiente para revisar cada 6h.
+      - key: RAPIDAPI_KEY
+        sync: false
