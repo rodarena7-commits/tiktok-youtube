@@ -24,14 +24,26 @@ function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http
     const req = client.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.tikwm.com/',
+      }
     }, res => {
-      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
         return fetchJson(res.headers.location).then(resolve).catch(reject)
       }
       let data = ''
       res.on('data', c => data += c)
-      res.on('end', () => { try { resolve(JSON.parse(data)) } catch { reject(new Error('JSON inválido')) } })
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data))
+        } catch {
+          // Mostrar los primeros 300 chars de la respuesta para debug
+          reject(new Error(`Respuesta no JSON (HTTP ${res.statusCode}): ${data.slice(0, 300)}`))
+        }
+      })
     })
     req.on('error', reject)
     req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')) })
@@ -49,21 +61,64 @@ function saveHistory(history) {
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2))
 }
 
-// ── Obtener lista de videos del perfil (TikWM API) ──────────
+// ── Obtener lista de videos del perfil — con 3 APIs de respaldo ─
 async function fetchProfileVideos(username, limit = 30) {
-  const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0&web=1`
-  const data = await fetchJson(url)
 
-  if (data.code !== 0) {
-    throw new Error(`TikWM: ${data.msg || 'error al obtener videos del perfil'}`)
+  // Intento 1: TikWM /api/user/posts
+  try {
+    const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0&web=1`
+    const data = await fetchJson(url)
+    if (data.code === 0 && Array.isArray(data.data?.videos)) {
+      console.log('✅ Fuente: TikWM /api/user/posts')
+      return data.data.videos.map(v => ({
+        id:          v.video_id,
+        webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
+        description: v.title || '',
+        title:       v.title || '',
+      }))
+    }
+    console.log(`⚠️  TikWM /api/user/posts: code=${data.code} msg=${data.msg}`)
+  } catch (e) {
+    console.log(`⚠️  TikWM /api/user/posts falló: ${e.message}`)
   }
 
-  return (data.data?.videos || []).map(v => ({
-    id:          v.video_id,
-    webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
-    description: v.title || '',
-    title:       v.title || '',
-  }))
+  // Intento 2: TikWM /api/user/info + /api/user/posts sin web=1
+  try {
+    const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0`
+    const data = await fetchJson(url)
+    if (data.code === 0 && Array.isArray(data.data?.videos)) {
+      console.log('✅ Fuente: TikWM /api/user/posts (sin web=1)')
+      return data.data.videos.map(v => ({
+        id:          v.video_id,
+        webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
+        description: v.title || '',
+        title:       v.title || '',
+      }))
+    }
+    console.log(`⚠️  TikWM (sin web=1): code=${data.code} msg=${data.msg}`)
+  } catch (e) {
+    console.log(`⚠️  TikWM (sin web=1) falló: ${e.message}`)
+  }
+
+  // Intento 3: Sindry API (alternativa gratuita)
+  try {
+    const url  = `https://www.tikwm.com/api/user/mix?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0`
+    const data = await fetchJson(url)
+    if (data.code === 0 && Array.isArray(data.data?.videos)) {
+      console.log('✅ Fuente: TikWM /api/user/mix')
+      return data.data.videos.map(v => ({
+        id:          v.video_id,
+        webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
+        description: v.title || '',
+        title:       v.title || '',
+      }))
+    }
+    console.log(`⚠️  TikWM /api/user/mix: code=${data.code} msg=${data.msg}`)
+  } catch (e) {
+    console.log(`⚠️  TikWM /api/user/mix falló: ${e.message}`)
+  }
+
+  throw new Error('Todas las APIs de listado fallaron. Revisá los logs para detalles.')
 }
 
 // ── Lógica principal de auto-subida ─────────────────────────
