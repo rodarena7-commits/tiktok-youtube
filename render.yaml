@@ -20,6 +20,10 @@ services:
       - key: YOUTUBE_REFRESH_TOKEN
         sync: false
 
+      # Cookies de TikTok (contenido del archivo cookies.txt exportado del navegador)
+      - key: TIKTOK_COOKIES
+        sync: false
+
       # ── Auto-upload de mrbeats ──────────────────────────────
       # Usuario de TikTok a monitorear (sin @)
       - key: TIKTOK_USERNAME

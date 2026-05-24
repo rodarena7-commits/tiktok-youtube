@@ -13,10 +13,20 @@
 const { exec } = require('child_process')
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
 const { downloadTikTok, getTempPath } = require('./downloader')
 const { uploadToYoutube } = require('./youtube')
 
 const HISTORY_FILE = path.join(__dirname, 'uploaded.json')
+
+// Escribe las cookies (desde env var) a un archivo temporal y devuelve la ruta
+function getCookiesArg() {
+  const content = process.env.TIKTOK_COOKIES
+  if (!content || !content.trim()) return ''
+  const cookiesPath = path.join(os.tmpdir(), 'tiktok_cookies.txt')
+  fs.writeFileSync(cookiesPath, content)
+  return `--cookies "${cookiesPath}"`
+}
 
 // ── Historial ───────────────────────────────────────────────
 function loadHistory() {
@@ -31,15 +41,20 @@ function saveHistory(history) {
 // ── Obtener lista de videos del perfil de TikTok ────────────
 function fetchProfileVideos(username, limit = 20) {
   return new Promise((resolve, reject) => {
+    const cookiesArg = getCookiesArg()
     // yt-dlp lista el perfil sin descargar nada (--flat-playlist)
     const cmd = [
       'yt-dlp',
       '--flat-playlist',
       '--dump-json',
       '--no-warnings',
+      '--ignore-errors',
       `--playlist-end ${limit}`,
+      cookiesArg,
+      // Ayuda con el bloqueo de TikTok
+      '--add-header "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"',
       `"https://www.tiktok.com/@${username}"`,
-    ].join(' ')
+    ].filter(Boolean).join(' ')
 
     exec(cmd, { timeout: 90000 }, (err, stdout, stderr) => {
       if (err && !stdout) return reject(new Error(stderr || err.message))
