@@ -10,22 +10,33 @@
  *     activar "Disk" en Render ($0.25/GB/mes) para persistencia real.
  */
 
-const { exec } = require('child_process')
-const fs = require('fs')
-const path = require('path')
-const os = require('os')
+const https = require('https')
+const http  = require('http')
+const fs    = require('fs')
+const path  = require('path')
 const { downloadTikTok, getTempPath } = require('./downloader')
 const { uploadToYoutube } = require('./youtube')
 
 const HISTORY_FILE = path.join(__dirname, 'uploaded.json')
 
-// Escribe las cookies (desde env var) a un archivo temporal y devuelve la ruta
-function getCookiesArg() {
-  const content = process.env.TIKTOK_COOKIES
-  if (!content || !content.trim()) return ''
-  const cookiesPath = path.join(os.tmpdir(), 'tiktok_cookies.txt')
-  fs.writeFileSync(cookiesPath, content)
-  return `--cookies "${cookiesPath}"`
+// ── Petición GET con JSON ──────────────────────────────────
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http
+    const req = client.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    }, res => {
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+        return fetchJson(res.headers.location).then(resolve).catch(reject)
+      }
+      let data = ''
+      res.on('data', c => data += c)
+      res.on('end', () => { try { resolve(JSON.parse(data)) } catch { reject(new Error('JSON inválido')) } })
+    })
+    req.on('error', reject)
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')) })
+    req.end()
+  })
 }
 
 // ── Historial ───────────────────────────────────────────────
@@ -38,32 +49,21 @@ function saveHistory(history) {
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2))
 }
 
-// ── Obtener lista de videos del perfil de TikTok ────────────
-function fetchProfileVideos(username, limit = 20) {
-  return new Promise((resolve, reject) => {
-    const cookiesArg = getCookiesArg()
-    // yt-dlp lista el perfil sin descargar nada (--flat-playlist)
-    const cmd = [
-      'yt-dlp',
-      '--flat-playlist',
-      '--dump-json',
-      '--no-warnings',
-      '--ignore-errors',
-      '--impersonate chrome',
-      `--playlist-end ${limit}`,
-      cookiesArg,
-      `"https://www.tiktok.com/@${username}"`,
-    ].filter(Boolean).join(' ')
+// ── Obtener lista de videos del perfil (TikWM API) ──────────
+async function fetchProfileVideos(username, limit = 30) {
+  const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0&web=1`
+  const data = await fetchJson(url)
 
-    exec(cmd, { timeout: 90000 }, (err, stdout, stderr) => {
-      if (err && !stdout) return reject(new Error(stderr || err.message))
-      const videos = stdout.trim().split('\n')
-        .filter(Boolean)
-        .map(line => { try { return JSON.parse(line) } catch { return null } })
-        .filter(Boolean)
-      resolve(videos)
-    })
-  })
+  if (data.code !== 0) {
+    throw new Error(`TikWM: ${data.msg || 'error al obtener videos del perfil'}`)
+  }
+
+  return (data.data?.videos || []).map(v => ({
+    id:          v.video_id,
+    webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
+    description: v.title || '',
+    title:       v.title || '',
+  }))
 }
 
 // ── Lógica principal de auto-subida ─────────────────────────
