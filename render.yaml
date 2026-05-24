@@ -2,7 +2,7 @@ services:
   - type: web
     name: tiktok-youtube
     env: node
-    buildCommand: pip install yt-dlp && npm install
+    buildCommand: pip install yt-dlp curl_cffi && npm install
     startCommand: node server.js
     envVars:
       # Contraseña para el panel web
