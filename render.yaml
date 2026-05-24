@@ -27,7 +27,7 @@ services:
       # ── Auto-upload de mrbeats ──────────────────────────────
       # Usuario de TikTok a monitorear (sin @)
       - key: TIKTOK_USERNAME
-        value: mrbeats
+        value: mrbeast
       # Cada cuántas horas revisar TikTok (mínimo 1)
       - key: AUTO_INTERVAL_HOURS
         value: "6"
@@ -39,7 +39,7 @@ services:
         value: public
       # Tags separados por coma (se agregan a todos los videos)
       - key: AUTO_TAGS
-        value: "mrbeats,beats,tiktok,shorts,música"
+        value: "mrbeast,MrBeast,tiktok,shorts,viral"
       # Texto extra al final de cada descripción (opcional)
       - key: AUTO_DESCRIPTION
         sync: false
