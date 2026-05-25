@@ -45,3 +45,10 @@ services:
       # Privacidad de los videos: public | unlisted | private
       - key: AUTO_PRIVACY
         value: public
+      # Duración del video en minutos (0 = duración del track original, sin loop)
+      # Ejemplos: 30 = 30 min con audio en loop, 60 = 1 hora
+      - key: VIDEO_DURATION_MINS
+        value: "30"
+      # Timeout máximo de FFmpeg en minutos — regla: VIDEO_DURATION_MINS * 3 ≈ mínimo seguro
+      - key: FFMPEG_TIMEOUT_MINS
+        value: "90"

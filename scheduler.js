@@ -275,8 +275,11 @@ async function runAutoUpload(options = {}) {
 
       // ── Paso 3: FFmpeg ──────────────────────────────────────
       t0 = Date.now()
-      log(`${prefix} [3/4] 🎞️  Creando video con FFmpeg (854×480, AAC 128k)...`)
-      await createVideo(audioPath, bgPath, outputPath, track.duration, ({ pct: p, elapsed, remaining, done }) => {
+      const videoMins    = parseInt(process.env.VIDEO_DURATION_MINS || '0')
+      const targetDuration = videoMins > 0 ? videoMins * 60 : track.duration
+      const durLabel     = videoMins > 0 ? `${videoMins} min (audio en loop)` : fmt(track.duration)
+      log(`${prefix} [3/4] 🎞️  Creando video con FFmpeg (1280×720, ${durLabel})...`)
+      await createVideo(bgPath, audioPath, outputPath, targetDuration, ({ pct: p, elapsed, remaining, done }) => {
         if (done) {
           log(`${prefix} [3/4]      ✓ Video creado en ${fmt(elapsed)}`)
         } else {
@@ -353,6 +356,7 @@ let schedulerTimer = null
 let lastRunAt      = null
 let lastRunResult  = null
 let isRunning      = false
+let currentLogs    = []
 
 function startScheduler() {
   const hours = parseFloat(process.env.AUTO_INTERVAL_HOURS || '6')
@@ -371,9 +375,16 @@ function triggerRun(source = 'manual') {
   isRunning     = true
   lastRunAt     = new Date().toISOString()
   lastRunResult = null
+  currentLogs   = []
 
   const logs  = []
-  const onLog = msg => { console.log(msg); logs.push({ time: new Date().toISOString(), msg }) }
+  const onLog = msg => {
+    console.log(msg)
+    const entry = { time: new Date().toISOString(), msg }
+    logs.push(entry)
+    currentLogs.push(entry)
+    if (currentLogs.length > 200) currentLogs.shift()
+  }
 
   onLog(`🚀 [${source}] Iniciando generación de videos...`)
 
@@ -393,12 +404,13 @@ function triggerRun(source = 'manual') {
 
 function getSchedulerStatus() {
   return {
-    running:          isRunning,
+    running:           isRunning,
     lastRunAt,
     lastRunResult,
-    intervalHours:    parseFloat(process.env.AUTO_INTERVAL_HOURS || '6'),
-    categories:       (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient').split(','),
-    ytConfigured:     !!process.env.YOUTUBE_REFRESH_TOKEN,
+    liveLogs:          isRunning ? [...currentLogs] : null,
+    intervalHours:     parseFloat(process.env.AUTO_INTERVAL_HOURS || '6'),
+    categories:        (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient').split(','),
+    ytConfigured:      !!process.env.YOUTUBE_REFRESH_TOKEN,
     jamendoConfigured: !!process.env.JAMENDO_CLIENT_ID,
     pixabayConfigured: !!process.env.PIXABAY_API_KEY,
   }

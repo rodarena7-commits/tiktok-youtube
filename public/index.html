@@ -154,16 +154,18 @@
         document.getElementById('lastRun').textContent = `Última ejecución: hace ${ago}${extra}`
       }
 
-      const logs = s.lastRunResult?.logs
+      const logs = s.liveLogs || s.lastRunResult?.logs
+      const box  = document.getElementById('logBox')
       if (logs && logs.length) {
-        const box = document.getElementById('logBox')
         box.style.display = 'block'
         box.textContent = logs.map(l => l.msg).join('\n')
         box.scrollTop = box.scrollHeight
+      } else if (!s.running) {
+        box.style.display = 'none'
       }
 
       document.getElementById('runBtn').disabled = s.running
-      if (s.running) setTimeout(loadStatus, 4000)
+      if (s.running) setTimeout(loadStatus, 3000)
     } catch (e) { console.error(e) }
   }
 
