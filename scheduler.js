@@ -138,7 +138,8 @@ async function fetchBackgroundVideoUrl(cat) {
     throw new Error(`Sin videos de fondo para "${cat.bgQuery}"`)
   }
   const pick     = data.hits[Math.floor(Math.random() * data.hits.length)]
-  const videoUrl = pick.videos?.medium?.url || pick.videos?.small?.url || pick.videos?.large?.url
+  // Usar calidad "small" (960x540) o "tiny" (640x360) para minimizar RAM en FFmpeg
+  const videoUrl = pick.videos?.small?.url || pick.videos?.tiny?.url || pick.videos?.medium?.url
   if (!videoUrl) throw new Error('Sin URL de video en respuesta de Pixabay')
   return videoUrl
 }

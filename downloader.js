@@ -53,8 +53,9 @@ function createVideo(audioPath, bgVideoPath, outputPath) {
       '-map', '1:a:0',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
-      '-crf', '30',
-      '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=24',
+      '-crf', '32',
+      '-threads', '1',            // un solo hilo para minimizar uso de RAM
+      '-vf', 'scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,fps=24,format=yuv420p',
       '-c:a', 'aac',
       '-b:a', '128k',
       '-shortest',
