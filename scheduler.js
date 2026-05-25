@@ -94,52 +94,42 @@ function saveHistory(history) {
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2))
 }
 
-// ── Método A: Scraping directo de tiktok.com ──────────────
+// ── Método A: TikTok API interna (ajax endpoints de tiktok.com) ─
 async function fetchTikTokDirect(username, limit) {
-  const html = await fetchText(`https://www.tiktok.com/@${username}?lang=en`)
+  const base = 'aid=1988&app_name=tiktok_web&device_platform=web_pc&region=US&priority_region=US&os=web'
 
-  if (html.includes('Just a moment') || html.includes('cf-browser-verification')) {
-    throw new Error('Cloudflare challenge en tiktok.com')
+  // Paso 1: obtener secUid del usuario
+  let secUid
+  try {
+    const raw = await fetchText(
+      `https://www.tiktok.com/api/user/detail/?uniqueId=${encodeURIComponent(username)}&${base}`,
+      { 'Referer': 'https://www.tiktok.com/', 'Accept': 'application/json' }
+    )
+    const json = JSON.parse(raw)
+    secUid = json?.userInfo?.user?.secUid
+    if (!secUid) throw new Error(`secUid no encontrado — statusCode=${json?.statusCode}`)
+  } catch (e) {
+    throw new Error(`user/detail: ${e.message}`)
   }
 
-  // SIGI_STATE (formato actual de TikTok)
-  const m1 = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/)
-  if (m1) {
-    const state = JSON.parse(m1[1])
-    const items = Object.values(state.ItemModule || {})
-    if (items.length > 0) {
-      console.log(`✅ Fuente: tiktok.com SIGI_STATE (${items.length} videos)`)
-      return items.slice(0, limit).map(v => ({
-        id:          v.id,
-        webpage_url: `https://www.tiktok.com/@${username}/video/${v.id}`,
-        description: v.desc || '',
-        title:       v.desc || '',
-      }))
-    }
+  // Paso 2: obtener lista de videos
+  const raw2 = await fetchText(
+    `https://www.tiktok.com/api/post/item_list/?secUid=${encodeURIComponent(secUid)}&count=${limit}&cursor=0&type=1&${base}`,
+    { 'Referer': `https://www.tiktok.com/@${username}`, 'Accept': 'application/json' }
+  )
+  const json2 = JSON.parse(raw2)
+
+  if (!Array.isArray(json2?.itemList) || json2.itemList.length === 0) {
+    throw new Error(`itemList vacío — statusCode=${json2?.statusCode}`)
   }
 
-  // __NEXT_DATA__ (formato anterior)
-  const m2 = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/)
-  if (m2) {
-    const nd = JSON.parse(m2[1])
-    const items = nd?.props?.pageProps?.items
-               || nd?.props?.pageProps?.videoData?.itemInfos
-               || []
-    if (items.length > 0) {
-      const videos = items.slice(0, limit).map(v => ({
-        id:          v.id || v.itemInfos?.id,
-        webpage_url: `https://www.tiktok.com/@${username}/video/${v.id || v.itemInfos?.id}`,
-        description: v.desc || v.itemInfos?.text || '',
-        title:       v.desc || v.itemInfos?.text || '',
-      })).filter(v => v.id)
-      if (videos.length > 0) {
-        console.log(`✅ Fuente: tiktok.com __NEXT_DATA__ (${videos.length} videos)`)
-        return videos
-      }
-    }
-  }
-
-  throw new Error(`Sin datos de video en HTML de TikTok (${html.length} chars)`)
+  console.log(`✅ Fuente: TikTok API interna (${json2.itemList.length} videos)`)
+  return json2.itemList.map(v => ({
+    id:          v.id,
+    webpage_url: `https://www.tiktok.com/@${username}/video/${v.id}`,
+    description: v.desc || '',
+    title:       v.desc || '',
+  }))
 }
 
 // ── Método B: Proxitok RSS (instancias públicas) ───────────
@@ -152,11 +142,14 @@ const PROXITOK_INSTANCES = [
 
 function parseRssVideos(xml, limit) {
   const videos = []
-  const re = /<item>([\s\S]*?)<\/item>/g
+  // Handle both RSS (<item>) and Atom (<entry>) formats
+  const re = /<(?:item|entry)>([\s\S]*?)<\/(?:item|entry)>/g
   let m
   while ((m = re.exec(xml)) && videos.length < limit) {
     const block = m[1]
-    const link  = (block.match(/<link>\s*(.*?)\s*<\/link>/)  || [])[1] || ''
+    // Atom: <link href="..."/> or RSS: <link>...</link>
+    const link = (block.match(/<link[^>]+href="([^"]+)"/) ||
+                  block.match(/<link>\s*(.*?)\s*<\/link>/) || [])[1] || ''
     const title = (block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || ''
     const clean = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').trim()
     const idMatch = link.match(/\/video\/(\d+)/)
