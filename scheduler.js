@@ -1,49 +1,86 @@
 /**
- * scheduler.js — Auto-upload de TikTok → YouTube
+ * scheduler.js — Auto-generación de videos de música libre de derechos → YouTube
  *
- * Escanea el perfil de TikTok configurado, detecta videos nuevos
- * y los sube automáticamente a YouTube.
- *
- * Persistencia del historial:
- *   - Se guarda en uploaded.json junto al código.
- *   - En Render FREE el filesystem se resetea con cada deploy;
- *     activar "Disk" en Render ($0.25/GB/mes) para persistencia real.
+ * Pipeline:
+ *   1. Busca pistas en Pixabay Music API (gratis, sin atribución requerida)
+ *   2. Obtiene un video de fondo de Pixabay Videos API
+ *   3. Combina audio + video con FFmpeg
+ *   4. Sube el resultado a YouTube automáticamente
  */
 
-const https = require('https')
-const http  = require('http')
-const fs    = require('fs')
-const path  = require('path')
-const zlib  = require('zlib')
-const { downloadTikTok, getTempPath } = require('./downloader')
-const { uploadToYoutube } = require('./youtube')
+const https        = require('https')
+const http         = require('http')
+const fs           = require('fs')
+const path         = require('path')
+const { downloadFile, createVideo, getTempPath } = require('./downloader')
+const { uploadToYoutube }                        = require('./youtube')
 
 const HISTORY_FILE = path.join(__dirname, 'uploaded.json')
 
-// ── Petición GET → JSON (con headers extra opcionales) ─────
-function fetchJson(url, extraHeaders = {}) {
+// ── Definición de categorías musicales ───────────────────────
+const MUSIC_CATEGORIES = [
+  {
+    id:      'sleep',
+    label:   'para Dormir',
+    emoji:   '🌙',
+    query:   'sleep relaxing calm peaceful night',
+    bgQuery: 'night stars moon ocean waves',
+    tags:    ['sleep music', 'música para dormir', 'relaxing music', 'calm music', 'no copyright music', 'free music'],
+    desc:    'Música relajante y suave para conciliar el sueño. Sin derechos de autor.',
+  },
+  {
+    id:      'study',
+    label:   'para Estudiar',
+    emoji:   '📚',
+    query:   'study lofi piano acoustic background',
+    bgQuery: 'rain window cozy coffee autumn',
+    tags:    ['study music', 'música para estudiar', 'lofi music', 'focus music', 'no copyright music', 'free music'],
+    desc:    'Música instrumental de fondo para estudiar y memorizar. Sin derechos de autor.',
+  },
+  {
+    id:      'focus',
+    label:   'para Concentrarse',
+    emoji:   '🎯',
+    query:   'focus concentration work productivity instrumental',
+    bgQuery: 'abstract minimal flowing geometric blue',
+    tags:    ['focus music', 'música para concentrarse', 'productivity music', 'work music', 'no copyright music'],
+    desc:    'Música instrumental para mejorar la concentración y productividad. Sin derechos de autor.',
+  },
+  {
+    id:      'travel',
+    label:   'para Viajar',
+    emoji:   '✈️',
+    query:   'travel adventure journey cinematic epic',
+    bgQuery: 'mountains landscape sunset road aerial',
+    tags:    ['travel music', 'música para viajar', 'adventure music', 'cinematic music', 'no copyright music'],
+    desc:    'Música épica e inspiradora para tus viajes y aventuras. Sin derechos de autor.',
+  },
+  {
+    id:      'ambient',
+    label:   'Ambiente',
+    emoji:   '🌿',
+    query:   'ambient nature atmosphere atmospheric meditation',
+    bgQuery: 'forest nature water stream river peaceful',
+    tags:    ['ambient music', 'música ambiente', 'nature sounds', 'meditation music', 'no copyright music'],
+    desc:    'Música de ambiente y naturaleza para relajar la mente. Sin derechos de autor.',
+  },
+]
+
+// ── HTTP GET → JSON ──────────────────────────────────────────
+function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https') ? https : http
     const req = client.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.tikwm.com/',
-        ...extraHeaders,
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
     }, res => {
       if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
-        return fetchJson(res.headers.location, extraHeaders).then(resolve).catch(reject)
+        return fetchJson(res.headers.location).then(resolve).catch(reject)
       }
-      let data = ''
-      res.on('data', c => data += c)
+      const chunks = []
+      res.on('data', c => chunks.push(c))
       res.on('end', () => {
-        try {
-          resolve(JSON.parse(data))
-        } catch {
-          reject(new Error(`Respuesta no JSON (HTTP ${res.statusCode}): ${data.slice(0, 300)}`))
-        }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString())) }
+        catch { reject(new Error(`No JSON (HTTP ${res.statusCode}): ${Buffer.concat(chunks).toString().slice(0, 100)}`)) }
       })
     })
     req.on('error', reject)
@@ -52,39 +89,38 @@ function fetchJson(url, extraHeaders = {}) {
   })
 }
 
-// ── Fetch de HTML/texto con descompresión gzip/deflate ─────
-function fetchText(url, extraHeaders = {}) {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http
-    const req = client.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate',
-        ...extraHeaders,
-      }
-    }, res => {
-      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
-        return fetchText(res.headers.location, extraHeaders).then(resolve).catch(reject)
-      }
-      const chunks = []
-      res.on('data', c => chunks.push(c))
-      res.on('end', () => {
-        const buf = Buffer.concat(chunks)
-        const enc = (res.headers['content-encoding'] || '').toLowerCase()
-        const done = (err, d) => err ? reject(err) : resolve(d.toString('utf8'))
-        if (enc === 'gzip')    zlib.gunzip(buf, done)
-        else if (enc === 'deflate') zlib.inflate(buf, done)
-        else resolve(buf.toString('utf8'))
-      })
-    })
-    req.on('error', reject)
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout')) })
-  })
+// ── Pixabay Music API ────────────────────────────────────────
+async function fetchMusicTracks(cat) {
+  const key = process.env.PIXABAY_API_KEY
+  const url = `https://pixabay.com/api/music/?key=${key}&q=${encodeURIComponent(cat.query)}&per_page=20&order=popular`
+  const data = await fetchJson(url)
+  if (!Array.isArray(data.hits)) throw new Error(`Pixabay Music: ${JSON.stringify(data).slice(0, 100)}`)
+  return data.hits.map(h => ({
+    id:        `${cat.id}_${h.id}`,
+    pixabayId: String(h.id),
+    title:     h.title || (h.tags || '').split(',')[0]?.trim() || 'Track',
+    audioUrl:  h.audio,
+    duration:  h.duration || 0,
+    category:  cat,
+  }))
 }
 
-// ── Historial ───────────────────────────────────────────────
+// ── Pixabay Videos API (fondos) ─────────────────────────────
+async function fetchBackgroundVideoUrl(cat) {
+  const key = process.env.PIXABAY_API_KEY
+  const url = `https://pixabay.com/api/videos/?key=${key}&q=${encodeURIComponent(cat.bgQuery)}&per_page=10&order=popular`
+  const data = await fetchJson(url)
+  if (!Array.isArray(data.hits) || data.hits.length === 0) {
+    throw new Error(`Sin videos de fondo para "${cat.bgQuery}"`)
+  }
+  // Elegir al azar entre los primeros resultados para variedad
+  const pick    = data.hits[Math.floor(Math.random() * data.hits.length)]
+  const videoUrl = pick.videos?.medium?.url || pick.videos?.small?.url || pick.videos?.large?.url
+  if (!videoUrl) throw new Error('Sin URL en respuesta de Pixabay Videos')
+  return videoUrl
+}
+
+// ── Historial ────────────────────────────────────────────────
 function loadHistory() {
   try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) }
   catch { return { uploaded: [] } }
@@ -94,243 +130,97 @@ function saveHistory(history) {
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2))
 }
 
-// ── Método A: TikTok API interna (ajax endpoints de tiktok.com) ─
-async function fetchTikTokDirect(username, limit) {
-  const base = 'aid=1988&app_name=tiktok_web&device_platform=web_pc&region=US&priority_region=US&os=web'
-
-  // Paso 1: obtener secUid del usuario
-  let secUid
-  try {
-    const raw = await fetchText(
-      `https://www.tiktok.com/api/user/detail/?uniqueId=${encodeURIComponent(username)}&${base}`,
-      { 'Referer': 'https://www.tiktok.com/', 'Accept': 'application/json' }
-    )
-    const json = JSON.parse(raw)
-    secUid = json?.userInfo?.user?.secUid
-    if (!secUid) throw new Error(`secUid no encontrado — statusCode=${json?.statusCode}`)
-  } catch (e) {
-    throw new Error(`user/detail: ${e.message}`)
-  }
-
-  // Paso 2: obtener lista de videos
-  const raw2 = await fetchText(
-    `https://www.tiktok.com/api/post/item_list/?secUid=${encodeURIComponent(secUid)}&count=${limit}&cursor=0&type=1&${base}`,
-    { 'Referer': `https://www.tiktok.com/@${username}`, 'Accept': 'application/json' }
-  )
-  const json2 = JSON.parse(raw2)
-
-  if (!Array.isArray(json2?.itemList) || json2.itemList.length === 0) {
-    throw new Error(`itemList vacío — statusCode=${json2?.statusCode}`)
-  }
-
-  console.log(`✅ Fuente: TikTok API interna (${json2.itemList.length} videos)`)
-  return json2.itemList.map(v => ({
-    id:          v.id,
-    webpage_url: `https://www.tiktok.com/@${username}/video/${v.id}`,
-    description: v.desc || '',
-    title:       v.desc || '',
-  }))
-}
-
-// ── Método B: Proxitok RSS (instancias públicas) ───────────
-const PROXITOK_INSTANCES = [
-  'https://proxitok.pabloferreiro.es',
-  'https://tiktok.privacydev.net',
-  'https://tok.habedieeh.re',
-  'https://proxitok.heitkonig.net',
-]
-
-function parseRssVideos(xml, limit) {
-  const videos = []
-  // Handle both RSS (<item>) and Atom (<entry>) formats
-  const re = /<(?:item|entry)>([\s\S]*?)<\/(?:item|entry)>/g
-  let m
-  while ((m = re.exec(xml)) && videos.length < limit) {
-    const block = m[1]
-    // Atom: <link href="..."/> or RSS: <link>...</link>
-    const link = (block.match(/<link[^>]+href="([^"]+)"/) ||
-                  block.match(/<link>\s*(.*?)\s*<\/link>/) || [])[1] || ''
-    const title = (block.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || ''
-    const clean = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').trim()
-    const idMatch = link.match(/\/video\/(\d+)/)
-    if (idMatch) {
-      videos.push({
-        id:          idMatch[1],
-        webpage_url: link.split('?')[0],
-        description: clean(title),
-        title:       clean(title),
-      })
-    }
-  }
-  return videos
-}
-
-async function fetchTikTokProxitok(username, limit) {
-  const errors = []
-  for (const inst of PROXITOK_INSTANCES) {
-    try {
-      const xml = await fetchText(`${inst}/@${username}/rss`)
-      if (!xml.includes('<item')) throw new Error(`Respuesta no RSS (${xml.length} chars)`)
-      const videos = parseRssVideos(xml, limit)
-      if (videos.length > 0) {
-        console.log(`✅ Fuente: Proxitok ${inst} (${videos.length} videos)`)
-        return videos
-      }
-      throw new Error('Feed RSS vacío (0 items)')
-    } catch (e) {
-      errors.push(`${inst.replace('https://', '')}: ${e.message}`)
-    }
-  }
-  throw new Error(`Proxitok: ${errors.join(' | ')}`)
-}
-
-// ── Método C: RapidAPI tiktok-api23 (requiere RAPIDAPI_KEY) ─
-async function fetchTikTokRapidAPI(username, limit) {
-  const url = `https://tiktok-api23.p.rapidapi.com/api/user/posts?unique_id=${encodeURIComponent('@' + username)}&count=${limit}&cursor=0`
-  const data = await fetchJson(url, {
-    'x-rapidapi-key':  process.env.RAPIDAPI_KEY,
-    'x-rapidapi-host': 'tiktok-api23.p.rapidapi.com',
-  })
-  if (data.code === 0 && Array.isArray(data.data?.videos)) {
-    console.log(`✅ Fuente: RapidAPI (${data.data.videos.length} videos)`)
-    return data.data.videos.map(v => ({
-      id:          v.video_id || v.id,
-      webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id || v.id}`,
-      description: v.title || v.desc || '',
-      title:       v.title || v.desc || '',
-    }))
-  }
-  throw new Error(`RapidAPI: code=${data.code} msg=${data.msg || JSON.stringify(data).slice(0, 80)}`)
-}
-
-// ── Obtener lista de videos del perfil — 4 métodos de respaldo ─
-async function fetchProfileVideos(username, limit = 30) {
-
-  // A: Scraping directo tiktok.com (gratis, sin clave)
-  try {
-    return await fetchTikTokDirect(username, limit)
-  } catch (e) {
-    console.log(`⚠️  TikTok directo: ${e.message}`)
-  }
-
-  // B: Proxitok RSS (gratis, sin clave)
-  try {
-    return await fetchTikTokProxitok(username, limit)
-  } catch (e) {
-    console.log(`⚠️  Proxitok: ${e.message}`)
-  }
-
-  // C: RapidAPI (si está configurado)
-  if (process.env.RAPIDAPI_KEY) {
-    try {
-      return await fetchTikTokRapidAPI(username, limit)
-    } catch (e) {
-      console.log(`⚠️  RapidAPI: ${e.message}`)
-    }
-  } else {
-    console.log('ℹ️  Sin RAPIDAPI_KEY — omitiendo RapidAPI (agregala en Render para mayor fiabilidad)')
-  }
-
-  // D: TikWM (fallback original, bloqueado por Cloudflare desde servidores cloud)
-  try {
-    const url  = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(username)}&count=${limit}&cursor=0&web=1`
-    const data = await fetchJson(url)
-    if (data.code === 0 && Array.isArray(data.data?.videos)) {
-      console.log('✅ Fuente: TikWM /api/user/posts')
-      return data.data.videos.map(v => ({
-        id:          v.video_id,
-        webpage_url: `https://www.tiktok.com/@${username}/video/${v.video_id}`,
-        description: v.title || '',
-        title:       v.title || '',
-      }))
-    }
-    console.log(`⚠️  TikWM: code=${data.code} msg=${data.msg}`)
-  } catch (e) {
-    console.log(`⚠️  TikWM: ${e.message}`)
-  }
-
-  throw new Error(
-    'Todas las fuentes de videos fallaron.\n' +
-    '  • Si los métodos gratuitos siguen fallando, configurá RAPIDAPI_KEY en Render.\n' +
-    '  • Registrarse en rapidapi.com → buscar "tiktok-api23" → copiar la API Key.'
-  )
-}
-
-// ── Lógica principal de auto-subida ─────────────────────────
+// ── Pipeline principal ───────────────────────────────────────
 async function runAutoUpload(options = {}) {
   const log = options.onLog || console.log
 
-  const username    = process.env.TIKTOK_USERNAME || 'mrbeats'
-  const maxPerRun   = parseInt(process.env.MAX_VIDEOS_PER_RUN || '5')
-  const privacy     = process.env.AUTO_PRIVACY || 'public'
-  const extraTags   = (process.env.AUTO_TAGS || 'mrbeats,tiktok,shorts,beats,música')
-    .split(',').map(t => t.trim()).filter(Boolean)
-  const extraDesc   = process.env.AUTO_DESCRIPTION || ''
-
+  if (!process.env.PIXABAY_API_KEY) {
+    throw new Error('Falta PIXABAY_API_KEY. Obtenerla gratis en pixabay.com/api/ y configurarla en Render.')
+  }
   if (!process.env.YOUTUBE_REFRESH_TOKEN) {
     throw new Error('YouTube no autenticado. Visitá /auth primero.')
   }
 
-  log(`🔍 Escaneando TikTok @${username}...`)
+  const maxPerRun   = parseInt(process.env.MAX_VIDEOS_PER_RUN || '3')
+  const privacy     = process.env.AUTO_PRIVACY || 'public'
+  const enabledCats = (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient')
+    .split(',').map(s => s.trim()).filter(Boolean)
 
-  const history    = loadHistory()
-  const uploadedIds = new Set(history.uploaded.map(v => v.tiktokId))
+  const history     = loadHistory()
+  const uploadedIds = new Set(history.uploaded.map(v => v.pixabayId))
 
-  let videos
-  try {
-    videos = await fetchProfileVideos(username, 30)
-  } catch (e) {
-    throw new Error(`Error al listar TikTok @${username}: ${e.message}`)
+  log(`🎵 Buscando música libre de derechos en ${enabledCats.length} categorías...`)
+
+  // Recolectar tracks nuevos de todas las categorías
+  const newTracks = []
+  for (const catId of enabledCats) {
+    const cat = MUSIC_CATEGORIES.find(c => c.id === catId)
+    if (!cat) { log(`   ⚠️  Categoría desconocida: ${catId}`); continue }
+    try {
+      const tracks = await fetchMusicTracks(cat)
+      const fresh  = tracks.filter(t => !uploadedIds.has(t.pixabayId))
+      log(`   ${cat.emoji} ${cat.label}: ${fresh.length} pistas nuevas de ${tracks.length}`)
+      newTracks.push(...fresh)
+    } catch (e) {
+      log(`   ⚠️  ${catId}: ${e.message}`)
+    }
   }
 
-  log(`📋 ${videos.length} videos encontrados en TikTok`)
-
-  const newVideos = videos.filter(v => v.id && !uploadedIds.has(v.id))
-  log(`🆕 ${newVideos.length} videos nuevos para subir`)
-
-  if (newVideos.length === 0) {
-    log('✅ Sin novedades — ya están todos subidos')
-    return { uploaded: 0, skipped: videos.length, newFound: 0 }
+  if (newTracks.length === 0) {
+    log('✅ Sin novedades — todos los tracks ya están en YouTube')
+    return { uploaded: 0, skipped: history.uploaded.length, newFound: 0 }
   }
 
-  // Subir de más antiguo a más nuevo (slice desde el final)
-  const toUpload = newVideos.slice(-maxPerRun)
-  let uploadedCount = 0
-  const results = []
+  log(`🆕 ${newTracks.length} pistas nuevas — procesando hasta ${maxPerRun}`)
+
+  const toUpload      = newTracks.slice(0, maxPerRun)
+  let uploadedCount   = 0
+  const results       = []
 
   for (let i = 0; i < toUpload.length; i++) {
-    const video = toUpload[i]
-    const tiktokUrl = video.webpage_url || `https://www.tiktok.com/@${username}/video/${video.id}`
-
-    // Título: descripción del TikTok (max 100 chars)
-    const rawTitle = (video.description || video.title || '').replace(/\n/g, ' ').trim()
-    const title = (rawTitle || `Beat de @${username}`).slice(0, 100)
+    const track   = toUpload[i]
+    const cat     = track.category
+    const jobId   = `${cat.id}_${track.pixabayId}`
+    const safeTitle = track.title.replace(/[<>:"\/\\|?*\n]/g, ' ').trim().slice(0, 60)
+    const ytTitle   = `${cat.emoji} Música ${cat.label} - ${safeTitle} | Sin Derechos de Autor`
 
     const description = [
-      rawTitle,
+      `${ytTitle}`,
       '',
-      `Video original de @${username} en TikTok.`,
-      tiktokUrl,
-      extraDesc,
+      cat.desc,
       '',
-      '#Shorts #' + username + ' #TikTok #Beats',
-    ].filter(l => l !== undefined).join('\n').trim()
+      '🎵 Música 100% libre de derechos de autor.',
+      'Podés usarla en tus propios videos sin restricciones.',
+      '',
+      `Fuente de audio: Pixabay Music — https://pixabay.com/music/`,
+      `Fuente de video: Pixabay — https://pixabay.com/videos/`,
+      '(Licencia libre de derechos Pixabay — no se requiere atribución)',
+      '',
+      '#MusicaLibre #SinDerechos #NocopyrightMusic #FreeMusic #RoyaltyFree',
+    ].join('\n')
 
-    log(`[${i + 1}/${toUpload.length}] ⬇️  Descargando: ${title}`)
-
-    const jobId = `auto_${video.id}`
-    const videoPath = getTempPath(jobId)
+    const audioPath  = getTempPath(jobId, 'mp3')
+    const bgPath     = getTempPath(jobId + '_bg', 'mp4')
+    const outputPath = getTempPath(jobId + '_out', 'mp4')
 
     try {
-      await downloadTikTok(tiktokUrl, videoPath)
+      log(`[${i + 1}/${toUpload.length}] ${cat.emoji} "${safeTitle}" (${Math.floor(track.duration / 60)}m${track.duration % 60}s)`)
+      log(`[${i + 1}/${toUpload.length}] ⬇️  Descargando audio...`)
+      await downloadFile(track.audioUrl, audioPath)
 
-      log(`[${i + 1}/${toUpload.length}] ⬆️  Subiendo: ${title}`)
+      log(`[${i + 1}/${toUpload.length}] 🎬  Obteniendo video de fondo...`)
+      const bgUrl = await fetchBackgroundVideoUrl(cat)
+      await downloadFile(bgUrl, bgPath)
 
+      log(`[${i + 1}/${toUpload.length}] 🎞️  Creando video con FFmpeg...`)
+      await createVideo(audioPath, bgPath, outputPath)
+
+      log(`[${i + 1}/${toUpload.length}] ⬆️  Subiendo a YouTube...`)
       const result = await uploadToYoutube({
-        videoPath,
-        title,
+        videoPath:   outputPath,
+        title:       ytTitle.slice(0, 100),
         description,
-        tags: extraTags,
+        tags:        cat.tags,
         privacy,
       })
 
@@ -338,11 +228,11 @@ async function runAutoUpload(options = {}) {
       log(`[${i + 1}/${toUpload.length}] ✅ ${ytUrl}`)
 
       const entry = {
-        tiktokId:   video.id,
-        tiktokUrl,
+        pixabayId:  track.pixabayId,
+        category:   cat.id,
+        title:      track.title,
         youtubeId:  result.id,
         youtubeUrl: ytUrl,
-        title,
         uploadedAt: new Date().toISOString(),
       }
       history.uploaded.push(entry)
@@ -351,28 +241,29 @@ async function runAutoUpload(options = {}) {
       uploadedCount++
 
     } catch (e) {
-      log(`[${i + 1}/${toUpload.length}] ❌ Error en ${video.id}: ${e.message}`)
-      results.push({ tiktokId: video.id, error: e.message })
+      log(`[${i + 1}/${toUpload.length}] ❌ Error: ${e.message}`)
+      results.push({ pixabayId: track.pixabayId, error: e.message })
     } finally {
-      try { if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath) } catch {}
+      for (const p of [audioPath, bgPath, outputPath]) {
+        try { if (fs.existsSync(p)) fs.unlinkSync(p) } catch {}
+      }
     }
 
-    // Pausa de 15s entre subidas para no saturar la API de YouTube
     if (i < toUpload.length - 1) {
-      await new Promise(r => setTimeout(r, 15000))
+      await new Promise(r => setTimeout(r, 10000))
     }
   }
 
   return {
-    uploaded:  uploadedCount,
-    failed:    toUpload.length - uploadedCount,
-    newFound:  newVideos.length,
-    skipped:   videos.length - newVideos.length,
+    uploaded: uploadedCount,
+    failed:   toUpload.length - uploadedCount,
+    newFound: newTracks.length,
+    skipped:  history.uploaded.length,
     results,
   }
 }
 
-// ── Iniciar scheduler periódico ──────────────────────────────
+// ── Scheduler periódico ──────────────────────────────────────
 let schedulerTimer = null
 let lastRunAt      = null
 let lastRunResult  = null
@@ -381,13 +272,8 @@ let isRunning      = false
 function startScheduler() {
   const hours = parseFloat(process.env.AUTO_INTERVAL_HOURS || '6')
   const ms    = Math.max(1, hours) * 60 * 60 * 1000
-
-  console.log(`⏰ Scheduler iniciado — revisará TikTok cada ${hours}h`)
-
-  // Primera ejecución al arrancar (con 30s de delay para que YouTube esté listo)
+  console.log(`⏰ Scheduler iniciado — generará videos cada ${hours}h`)
   setTimeout(() => triggerRun('startup'), 30 * 1000)
-
-  // Luego cada N horas
   schedulerTimer = setInterval(() => triggerRun('scheduled'), ms)
 }
 
@@ -396,15 +282,15 @@ function stopScheduler() {
 }
 
 function triggerRun(source = 'manual') {
-  if (isRunning) return { error: 'Ya hay una subida en curso' }
-  isRunning = true
-  lastRunAt = new Date().toISOString()
+  if (isRunning) return { error: 'Ya hay una generación en curso' }
+  isRunning  = true
+  lastRunAt  = new Date().toISOString()
   lastRunResult = null
 
-  const logs = []
+  const logs  = []
   const onLog = msg => { console.log(msg); logs.push({ time: new Date().toISOString(), msg }) }
 
-  onLog(`🚀 [${source}] Iniciando auto-upload...`)
+  onLog(`🚀 [${source}] Iniciando generación de videos...`)
 
   runAutoUpload({ onLog })
     .then(result => {
@@ -413,7 +299,7 @@ function triggerRun(source = 'manual') {
     })
     .catch(err => {
       lastRunResult = { ok: false, error: err.message, logs, finishedAt: new Date().toISOString() }
-      console.error(`❌ Auto-upload falló: ${err.message}`)
+      console.error(`❌ Generación falló: ${err.message}`)
     })
     .finally(() => { isRunning = false })
 
@@ -422,12 +308,13 @@ function triggerRun(source = 'manual') {
 
 function getSchedulerStatus() {
   return {
-    running:        isRunning,
+    running:           isRunning,
     lastRunAt,
     lastRunResult,
-    intervalHours:  parseFloat(process.env.AUTO_INTERVAL_HOURS || '6'),
-    tiktokUsername: process.env.TIKTOK_USERNAME || 'mrbeats',
-    ytConfigured:   !!process.env.YOUTUBE_REFRESH_TOKEN,
+    intervalHours:     parseFloat(process.env.AUTO_INTERVAL_HOURS || '6'),
+    categories:        (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient').split(','),
+    ytConfigured:      !!process.env.YOUTUBE_REFRESH_TOKEN,
+    pixabayConfigured: !!process.env.PIXABAY_API_KEY,
   }
 }
 

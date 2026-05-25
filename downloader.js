@@ -1,122 +1,72 @@
 /**
- * downloader.js — Descarga videos de TikTok usando la API de TikWM
- * Sin yt-dlp, sin Python, sin dependencias externas.
- * TikWM es una API pública gratuita: https://www.tikwm.com/
+ * downloader.js — Descarga audio/video de Pixabay y los combina con FFmpeg
  */
 
-const https = require('https')
-const http  = require('http')
-const fs    = require('fs')
-const path  = require('path')
-const os    = require('os')
+const https          = require('https')
+const http           = require('http')
+const fs             = require('fs')
+const path           = require('path')
+const os             = require('os')
+const { execFile }   = require('child_process')
+const ffmpegBin      = require('ffmpeg-static')
 
-function getTempPath(jobId) {
-  return path.join(os.tmpdir(), `tiktok_${jobId}.mp4`)
+function getTempPath(id, ext = 'mp4') {
+  return path.join(os.tmpdir(), `music_${id}.${ext}`)
 }
 
-// ── Petición HTTP/HTTPS genérica ───────────────────────────
-function fetchJson(url, postBody = null) {
-  return new Promise((resolve, reject) => {
-    const isHttps  = url.startsWith('https')
-    const client   = isHttps ? https : http
-    const headers  = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept':     'application/json',
-    }
-
-    let reqOpts
-    let body = null
-
-    if (postBody) {
-      body = new URLSearchParams(postBody).toString()
-      const urlObj = new URL(url)
-      reqOpts = {
-        hostname: urlObj.hostname,
-        path:     urlObj.pathname + urlObj.search,
-        method:   'POST',
-        headers:  { ...headers, 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
-      }
-    } else {
-      reqOpts = url
-    }
-
-    const req = client.request(reqOpts, res => {
-      // Seguir redirecciones
-      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
-        return fetchJson(res.headers.location, postBody).then(resolve).catch(reject)
-      }
-      let data = ''
-      res.on('data', chunk => data += chunk)
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)) }
-        catch { reject(new Error(`Respuesta no válida de la API: ${data.slice(0, 200)}`)) }
-      })
-    })
-
-    req.on('error', reject)
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout al consultar la API')) })
-    if (body) req.write(body)
-    req.end()
-  })
-}
-
-// ── Descarga binaria de un archivo ────────────────────────
+// ── Descarga binaria (audio MP3 o video MP4) ──────────────
 function downloadFile(fileUrl, outputPath, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 8) return reject(new Error('Demasiadas redirecciones'))
-    const isHttps = fileUrl.startsWith('https')
-    const client  = isHttps ? https : http
-
+    const client = fileUrl.startsWith('https') ? https : http
     const req = client.get(fileUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer':    'https://www.tiktok.com/',
-      },
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Referer':    'https://pixabay.com/',
+      }
     }, res => {
-      if ((res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307) && res.headers.location) {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
         return downloadFile(res.headers.location, outputPath, redirects + 1).then(resolve).catch(reject)
       }
       if (res.statusCode !== 200) {
-        return reject(new Error(`Error HTTP ${res.statusCode} al descargar el video`))
+        return reject(new Error(`HTTP ${res.statusCode} descargando archivo`))
       }
       const file = fs.createWriteStream(outputPath)
       res.pipe(file)
       file.on('finish', () => { file.close(); resolve(outputPath) })
-      file.on('error', reject)
+      file.on('error', err => { file.close(); reject(err) })
     })
-
     req.on('error', reject)
-    req.setTimeout(180000, () => { req.destroy(); reject(new Error('Timeout al descargar el video')) })
+    req.setTimeout(180000, () => { req.destroy(); reject(new Error('Timeout descargando')) })
   })
 }
 
-// ── Obtener metadatos de un video por URL ─────────────────
-async function getTikTokMeta(url) {
-  try {
-    const data = await fetchJson('https://www.tikwm.com/api/', { url, hd: 1 })
-    if (data.code !== 0) return null
-    return {
-      title:    data.data.title    || '',
-      duration: data.data.duration || 0,
-      uploader: data.data.author?.unique_id || data.data.author?.nickname || '',
-    }
-  } catch { return null }
+// ── Combinar audio + video de fondo con FFmpeg ────────────
+// El video de fondo se repite en loop hasta que termine el audio.
+function createVideo(audioPath, bgVideoPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-stream_loop', '-1',       // loop infinito del video de fondo
+      '-i', bgVideoPath,
+      '-i', audioPath,
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '30',
+      '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=24',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-shortest',
+      '-movflags', '+faststart',
+      '-y',
+      outputPath,
+    ]
+    execFile(ffmpegBin, args, { timeout: 600000 }, (err, _stdout, stderr) => {
+      if (err) return reject(new Error(`FFmpeg: ${(stderr || '').slice(-400)}`))
+      resolve(outputPath)
+    })
+  })
 }
 
-// ── Descargar un video de TikTok por su URL pública ───────
-async function downloadTikTok(tiktokUrl, outputPath) {
-  const data = await fetchJson('https://www.tikwm.com/api/', { url: tiktokUrl, hd: 1 })
-
-  if (data.code !== 0) {
-    throw new Error(`TikWM: ${data.msg || 'error desconocido'}`)
-  }
-
-  // hdplay = sin marca de agua en HD; play = con marca de agua (fallback)
-  const videoUrl = data.data.hdplay || data.data.play
-  if (!videoUrl) throw new Error('No se encontró URL de descarga en la respuesta de TikWM')
-
-  await downloadFile(videoUrl, outputPath)
-  return outputPath
-}
-
-module.exports = { downloadTikTok, getTikTokMeta, getTempPath }
+module.exports = { downloadFile, createVideo, getTempPath }

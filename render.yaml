@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: tiktok-youtube
+    name: music-youtube-auto
     env: node
     buildCommand: npm install
     startCommand: node server.js
@@ -9,44 +9,34 @@ services:
       - key: UPLOAD_PASSWORD
         sync: false
 
-      # Google OAuth (obtenelos en console.cloud.google.com)
+      # Google OAuth (console.cloud.google.com)
       - key: YOUTUBE_CLIENT_ID
         sync: false
       - key: YOUTUBE_CLIENT_SECRET
         sync: false
+      # Debe coincidir exactamente con lo que pusiste en Google Cloud Console
       - key: YOUTUBE_REDIRECT_URI
         sync: false
-      # Se obtiene visitando /auth después del deploy
+      # Se obtiene visitando /auth después del primer deploy
       - key: YOUTUBE_REFRESH_TOKEN
         sync: false
 
-      # Cookies de TikTok (contenido del archivo cookies.txt exportado del navegador)
-      - key: TIKTOK_COOKIES
+      # Pixabay API — registro gratuito en pixabay.com/api/
+      # Misma clave sirve para música y videos de fondo
+      - key: PIXABAY_API_KEY
         sync: false
 
-      # ── Auto-upload de mrbeats ──────────────────────────────
-      # Usuario de TikTok a monitorear (sin @)
-      - key: TIKTOK_USERNAME
-        value: mrbeast
-      # Cada cuántas horas revisar TikTok (mínimo 1)
+      # ── Configuración del generador ───────────────────────
+      # Categorías habilitadas (separadas por coma)
+      # Opciones: sleep, study, focus, travel, ambient
+      - key: MUSIC_CATEGORIES
+        value: "sleep,study,focus,travel,ambient"
+      # Cada cuántas horas buscar música nueva (mínimo 1)
       - key: AUTO_INTERVAL_HOURS
         value: "6"
-      # Máximo de videos a subir por ejecución
+      # Máximo de videos a generar y subir por ejecución
       - key: MAX_VIDEOS_PER_RUN
-        value: "5"
-      # Privacidad de los videos subidos: public | unlisted | private
+        value: "3"
+      # Privacidad de los videos: public | unlisted | private
       - key: AUTO_PRIVACY
         value: public
-      # Tags separados por coma (se agregan a todos los videos)
-      - key: AUTO_TAGS
-        value: "mrbeast,MrBeast,tiktok,shorts,viral"
-      # Texto extra al final de cada descripción (opcional)
-      - key: AUTO_DESCRIPTION
-        sync: false
-
-      # ── Fuente de videos: RapidAPI (opcional pero recomendado) ──
-      # Si tiktok.com y Proxitok fallan desde Render, configurar esta clave.
-      # Registro gratuito en rapidapi.com → buscar "TikTok API" por "api23"
-      # Plan Basic: 500 req/mes gratis — suficiente para revisar cada 6h.
-      - key: RAPIDAPI_KEY
-        sync: false
