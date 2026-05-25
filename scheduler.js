@@ -275,6 +275,19 @@ async function runAutoUpload(options = {}) {
     } catch (e) {
       log(`[${i + 1}/${toUpload.length}] ❌ Error: ${e.message}`)
       results.push({ trackId: track.trackId, error: e.message })
+      // Guardar en historial como "skipped" para no reintentar tracks con descarga bloqueada
+      if (e.message.includes('HTTP 500') || e.message.includes('HTTP 403') || e.message.includes('HTTP 404')) {
+        history.uploaded.push({
+          trackId:    track.trackId,
+          category:   cat.id,
+          title:      track.title,
+          artist:     track.artist,
+          skipped:    true,
+          skipReason: e.message,
+          uploadedAt: new Date().toISOString(),
+        })
+        saveHistory(history)
+      }
     } finally {
       for (const p of [audioPath, bgPath, outputPath]) {
         try { if (fs.existsSync(p)) fs.unlinkSync(p) } catch {}
