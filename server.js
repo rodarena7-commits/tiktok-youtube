@@ -85,22 +85,21 @@ app.get('/health', (req, res) => {
     ok:                true,
     ytConfigured:      !!process.env.YOUTUBE_REFRESH_TOKEN,
     clientConfigured:  !!process.env.YOUTUBE_CLIENT_ID,
+    jamendoConfigured: !!process.env.JAMENDO_CLIENT_ID,
     pixabayConfigured: !!process.env.PIXABAY_API_KEY,
     categories:        (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient').split(','),
-    schedulerActive:   !!(process.env.YOUTUBE_REFRESH_TOKEN && process.env.PIXABAY_API_KEY),
+    schedulerActive:   !!(process.env.YOUTUBE_REFRESH_TOKEN && process.env.JAMENDO_CLIENT_ID && process.env.PIXABAY_API_KEY),
   })
 })
 
 app.listen(PORT, () => {
   console.log(`🎵 Music Auto-Upload en http://localhost:${PORT}`)
-  if (process.env.YOUTUBE_REFRESH_TOKEN && process.env.PIXABAY_API_KEY) {
+  const ready = process.env.YOUTUBE_REFRESH_TOKEN && process.env.JAMENDO_CLIENT_ID && process.env.PIXABAY_API_KEY
+  if (ready) {
     startScheduler()
   } else {
-    if (!process.env.YOUTUBE_REFRESH_TOKEN) {
-      console.log('⚠️  Falta YOUTUBE_REFRESH_TOKEN — autenticá en /auth')
-    }
-    if (!process.env.PIXABAY_API_KEY) {
-      console.log('⚠️  Falta PIXABAY_API_KEY — obtenerla gratis en pixabay.com/api/')
-    }
+    if (!process.env.YOUTUBE_REFRESH_TOKEN) console.log('⚠️  Falta YOUTUBE_REFRESH_TOKEN — autenticá en /auth')
+    if (!process.env.JAMENDO_CLIENT_ID)     console.log('⚠️  Falta JAMENDO_CLIENT_ID — obtenerlo gratis en developer.jamendo.com')
+    if (!process.env.PIXABAY_API_KEY)       console.log('⚠️  Falta PIXABAY_API_KEY — obtenerla gratis en pixabay.com/api/')
   }
 })

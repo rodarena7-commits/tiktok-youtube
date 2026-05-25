@@ -1,11 +1,9 @@
 /**
  * scheduler.js — Auto-generación de videos de música libre de derechos → YouTube
  *
- * Pipeline:
- *   1. Busca pistas en Pixabay Music API (gratis, sin atribución requerida)
- *   2. Obtiene un video de fondo de Pixabay Videos API
- *   3. Combina audio + video con FFmpeg
- *   4. Sube el resultado a YouTube automáticamente
+ * Música:          Jamendo API  (gratis, CC licensed, requiere JAMENDO_CLIENT_ID)
+ * Video de fondo:  Pixabay Videos API (gratis, requiere PIXABAY_API_KEY)
+ * Creación video:  FFmpeg (ffmpeg-static)
  */
 
 const https        = require('https')
@@ -17,52 +15,52 @@ const { uploadToYoutube }                        = require('./youtube')
 
 const HISTORY_FILE = path.join(__dirname, 'uploaded.json')
 
-// ── Definición de categorías musicales ───────────────────────
+// ── Categorías musicales ─────────────────────────────────────
 const MUSIC_CATEGORIES = [
   {
-    id:      'sleep',
-    label:   'para Dormir',
-    emoji:   '🌙',
-    query:   'sleep relaxing calm peaceful night',
-    bgQuery: 'night stars moon ocean waves',
-    tags:    ['sleep music', 'música para dormir', 'relaxing music', 'calm music', 'no copyright music', 'free music'],
-    desc:    'Música relajante y suave para conciliar el sueño. Sin derechos de autor.',
+    id:        'sleep',
+    label:     'para Dormir',
+    emoji:     '🌙',
+    fuzzytags: 'sleep ambient calm relaxing',
+    bgQuery:   'night stars moon ocean waves',
+    tags:      ['sleep music', 'música para dormir', 'relaxing music', 'calm music', 'no copyright music', 'free music'],
+    desc:      'Música relajante y suave para conciliar el sueño. Licencia Creative Commons — libre de derechos.',
   },
   {
-    id:      'study',
-    label:   'para Estudiar',
-    emoji:   '📚',
-    query:   'study lofi piano acoustic background',
-    bgQuery: 'rain window cozy coffee autumn',
-    tags:    ['study music', 'música para estudiar', 'lofi music', 'focus music', 'no copyright music', 'free music'],
-    desc:    'Música instrumental de fondo para estudiar y memorizar. Sin derechos de autor.',
+    id:        'study',
+    label:     'para Estudiar',
+    emoji:     '📚',
+    fuzzytags: 'study lofi piano acoustic focus',
+    bgQuery:   'rain window cozy coffee autumn leaves',
+    tags:      ['study music', 'música para estudiar', 'lofi music', 'focus music', 'no copyright music', 'free music'],
+    desc:      'Música instrumental de fondo para estudiar y memorizar. Licencia Creative Commons.',
   },
   {
-    id:      'focus',
-    label:   'para Concentrarse',
-    emoji:   '🎯',
-    query:   'focus concentration work productivity instrumental',
-    bgQuery: 'abstract minimal flowing geometric blue',
-    tags:    ['focus music', 'música para concentrarse', 'productivity music', 'work music', 'no copyright music'],
-    desc:    'Música instrumental para mejorar la concentración y productividad. Sin derechos de autor.',
+    id:        'focus',
+    label:     'para Concentrarse',
+    emoji:     '🎯',
+    fuzzytags: 'focus concentration work productivity electronic',
+    bgQuery:   'abstract minimal flowing geometric blue',
+    tags:      ['focus music', 'música para concentrarse', 'productivity music', 'work music', 'no copyright music'],
+    desc:      'Música instrumental para mejorar la concentración y productividad. Licencia Creative Commons.',
   },
   {
-    id:      'travel',
-    label:   'para Viajar',
-    emoji:   '✈️',
-    query:   'travel adventure journey cinematic epic',
-    bgQuery: 'mountains landscape sunset road aerial',
-    tags:    ['travel music', 'música para viajar', 'adventure music', 'cinematic music', 'no copyright music'],
-    desc:    'Música épica e inspiradora para tus viajes y aventuras. Sin derechos de autor.',
+    id:        'travel',
+    label:     'para Viajar',
+    emoji:     '✈️',
+    fuzzytags: 'travel adventure journey cinematic epic',
+    bgQuery:   'mountains landscape sunset road aerial',
+    tags:      ['travel music', 'música para viajar', 'adventure music', 'cinematic music', 'no copyright music'],
+    desc:      'Música épica e inspiradora para tus viajes y aventuras. Licencia Creative Commons.',
   },
   {
-    id:      'ambient',
-    label:   'Ambiente',
-    emoji:   '🌿',
-    query:   'ambient nature atmosphere atmospheric meditation',
-    bgQuery: 'forest nature water stream river peaceful',
-    tags:    ['ambient music', 'música ambiente', 'nature sounds', 'meditation music', 'no copyright music'],
-    desc:    'Música de ambiente y naturaleza para relajar la mente. Sin derechos de autor.',
+    id:        'ambient',
+    label:     'Ambiente',
+    emoji:     '🌿',
+    fuzzytags: 'ambient nature atmospheric meditation relaxing',
+    bgQuery:   'forest nature water stream river peaceful',
+    tags:      ['ambient music', 'música ambiente', 'nature sounds', 'meditation music', 'no copyright music'],
+    desc:      'Música de ambiente y naturaleza para relajar la mente. Licencia Creative Commons.',
   },
 ]
 
@@ -79,8 +77,9 @@ function fetchJson(url) {
       const chunks = []
       res.on('data', c => chunks.push(c))
       res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(chunks).toString())) }
-        catch { reject(new Error(`No JSON (HTTP ${res.statusCode}): ${Buffer.concat(chunks).toString().slice(0, 100)}`)) }
+        const raw = Buffer.concat(chunks).toString()
+        try { resolve(JSON.parse(raw)) }
+        catch { reject(new Error(`No JSON (HTTP ${res.statusCode}): ${raw.slice(0, 120)}`)) }
       })
     })
     req.on('error', reject)
@@ -89,34 +88,58 @@ function fetchJson(url) {
   })
 }
 
-// ── Pixabay Music API ────────────────────────────────────────
+// ── Jamendo Music API ────────────────────────────────────────
+// Documentación: https://developer.jamendo.com/v3.0/tracks
 async function fetchMusicTracks(cat) {
-  const key = process.env.PIXABAY_API_KEY
-  const url = `https://pixabay.com/api/music/?key=${key}&q=${encodeURIComponent(cat.query)}&per_page=20&order=popular`
+  const clientId = process.env.JAMENDO_CLIENT_ID
+  if (!clientId) throw new Error('Falta JAMENDO_CLIENT_ID')
+
+  const url = [
+    'https://api.jamendo.com/v3.0/tracks/',
+    `?client_id=${encodeURIComponent(clientId)}`,
+    '&format=json',
+    '&limit=20',
+    `&fuzzytags=${encodeURIComponent(cat.fuzzytags)}`,
+    '&audioformat=mp32',       // MP3 128kbps
+    '&order=popularity_total', // más populares primero
+    '&include=musicinfo',
+  ].join('')
+
   const data = await fetchJson(url)
-  if (!Array.isArray(data.hits)) throw new Error(`Pixabay Music: ${JSON.stringify(data).slice(0, 100)}`)
-  return data.hits.map(h => ({
-    id:        `${cat.id}_${h.id}`,
-    pixabayId: String(h.id),
-    title:     h.title || (h.tags || '').split(',')[0]?.trim() || 'Track',
-    audioUrl:  h.audio,
-    duration:  h.duration || 0,
-    category:  cat,
-  }))
+
+  if (data.headers?.status !== 'success') {
+    throw new Error(`Jamendo: ${data.headers?.error_message || JSON.stringify(data.headers).slice(0, 100)}`)
+  }
+  if (!Array.isArray(data.results) || data.results.length === 0) {
+    throw new Error(`Jamendo: 0 resultados para "${cat.fuzzytags}"`)
+  }
+
+  return data.results.map(t => ({
+    id:       `${cat.id}_${t.id}`,
+    trackId:  String(t.id),
+    title:    t.name || 'Track',
+    audioUrl: t.audiodownload || t.audio,
+    duration: t.duration || 0,
+    artist:   t.artist_name || '',
+    license:  t.license_ccurl || 'https://creativecommons.org/licenses/by/4.0/',
+    category: cat,
+  })).filter(t => t.audioUrl)
 }
 
 // ── Pixabay Videos API (fondos) ─────────────────────────────
 async function fetchBackgroundVideoUrl(cat) {
   const key = process.env.PIXABAY_API_KEY
+  if (!key) throw new Error('Falta PIXABAY_API_KEY')
+
   const url = `https://pixabay.com/api/videos/?key=${key}&q=${encodeURIComponent(cat.bgQuery)}&per_page=10&order=popular`
   const data = await fetchJson(url)
+
   if (!Array.isArray(data.hits) || data.hits.length === 0) {
     throw new Error(`Sin videos de fondo para "${cat.bgQuery}"`)
   }
-  // Elegir al azar entre los primeros resultados para variedad
-  const pick    = data.hits[Math.floor(Math.random() * data.hits.length)]
+  const pick     = data.hits[Math.floor(Math.random() * data.hits.length)]
   const videoUrl = pick.videos?.medium?.url || pick.videos?.small?.url || pick.videos?.large?.url
-  if (!videoUrl) throw new Error('Sin URL en respuesta de Pixabay Videos')
+  if (!videoUrl) throw new Error('Sin URL de video en respuesta de Pixabay')
   return videoUrl
 }
 
@@ -134,6 +157,9 @@ function saveHistory(history) {
 async function runAutoUpload(options = {}) {
   const log = options.onLog || console.log
 
+  if (!process.env.JAMENDO_CLIENT_ID) {
+    throw new Error('Falta JAMENDO_CLIENT_ID. Obtenerlo gratis en developer.jamendo.com y configurarlo en Render.')
+  }
   if (!process.env.PIXABAY_API_KEY) {
     throw new Error('Falta PIXABAY_API_KEY. Obtenerla gratis en pixabay.com/api/ y configurarla en Render.')
   }
@@ -147,18 +173,17 @@ async function runAutoUpload(options = {}) {
     .split(',').map(s => s.trim()).filter(Boolean)
 
   const history     = loadHistory()
-  const uploadedIds = new Set(history.uploaded.map(v => v.pixabayId))
+  const uploadedIds = new Set(history.uploaded.map(v => v.trackId))
 
-  log(`🎵 Buscando música libre de derechos en ${enabledCats.length} categorías...`)
+  log(`🎵 Buscando música en Jamendo (${enabledCats.length} categorías)...`)
 
-  // Recolectar tracks nuevos de todas las categorías
   const newTracks = []
   for (const catId of enabledCats) {
     const cat = MUSIC_CATEGORIES.find(c => c.id === catId)
     if (!cat) { log(`   ⚠️  Categoría desconocida: ${catId}`); continue }
     try {
       const tracks = await fetchMusicTracks(cat)
-      const fresh  = tracks.filter(t => !uploadedIds.has(t.pixabayId))
+      const fresh  = tracks.filter(t => !uploadedIds.has(t.trackId))
       log(`   ${cat.emoji} ${cat.label}: ${fresh.length} pistas nuevas de ${tracks.length}`)
       newTracks.push(...fresh)
     } catch (e) {
@@ -173,30 +198,34 @@ async function runAutoUpload(options = {}) {
 
   log(`🆕 ${newTracks.length} pistas nuevas — procesando hasta ${maxPerRun}`)
 
-  const toUpload      = newTracks.slice(0, maxPerRun)
-  let uploadedCount   = 0
-  const results       = []
+  const toUpload    = newTracks.slice(0, maxPerRun)
+  let uploadedCount = 0
+  const results     = []
 
   for (let i = 0; i < toUpload.length; i++) {
-    const track   = toUpload[i]
-    const cat     = track.category
-    const jobId   = `${cat.id}_${track.pixabayId}`
-    const safeTitle = track.title.replace(/[<>:"\/\\|?*\n]/g, ' ').trim().slice(0, 60)
-    const ytTitle   = `${cat.emoji} Música ${cat.label} - ${safeTitle} | Sin Derechos de Autor`
+    const track      = toUpload[i]
+    const cat        = track.category
+    const jobId      = `${cat.id}_${track.trackId}`
+    const safeTitle  = track.title.replace(/[<>:"\/\\|?*\n]/g, ' ').trim().slice(0, 60)
+    const ytTitle    = `${cat.emoji} Música ${cat.label} - ${safeTitle} | Sin Derechos de Autor`
+    const dur        = `${Math.floor(track.duration / 60)}m${String(track.duration % 60).padStart(2, '0')}s`
 
     const description = [
-      `${ytTitle}`,
+      ytTitle,
       '',
       cat.desc,
       '',
-      '🎵 Música 100% libre de derechos de autor.',
+      '🎵 Música libre de derechos de autor (licencia Creative Commons).',
       'Podés usarla en tus propios videos sin restricciones.',
       '',
-      `Fuente de audio: Pixabay Music — https://pixabay.com/music/`,
-      `Fuente de video: Pixabay — https://pixabay.com/videos/`,
-      '(Licencia libre de derechos Pixabay — no se requiere atribución)',
+      `🎼 Artista: ${track.artist}`,
+      `📀 Título:  ${track.title}`,
+      `⚖️  Licencia: ${track.license}`,
+      `🔗 Fuente:  https://www.jamendo.com`,
       '',
-      '#MusicaLibre #SinDerechos #NocopyrightMusic #FreeMusic #RoyaltyFree',
+      'Video de fondo: Pixabay (https://pixabay.com/videos/)',
+      '',
+      '#MusicaLibre #SinDerechos #CreativeCommons #FreeMusic #RoyaltyFree #NocopyrightMusic',
     ].join('\n')
 
     const audioPath  = getTempPath(jobId, 'mp3')
@@ -204,11 +233,12 @@ async function runAutoUpload(options = {}) {
     const outputPath = getTempPath(jobId + '_out', 'mp4')
 
     try {
-      log(`[${i + 1}/${toUpload.length}] ${cat.emoji} "${safeTitle}" (${Math.floor(track.duration / 60)}m${track.duration % 60}s)`)
-      log(`[${i + 1}/${toUpload.length}] ⬇️  Descargando audio...`)
+      log(`[${i + 1}/${toUpload.length}] ${cat.emoji} "${safeTitle}" por ${track.artist} (${dur})`)
+
+      log(`[${i + 1}/${toUpload.length}] ⬇️  Descargando audio de Jamendo...`)
       await downloadFile(track.audioUrl, audioPath)
 
-      log(`[${i + 1}/${toUpload.length}] 🎬  Obteniendo video de fondo...`)
+      log(`[${i + 1}/${toUpload.length}] 🎬  Obteniendo video de fondo de Pixabay...`)
       const bgUrl = await fetchBackgroundVideoUrl(cat)
       await downloadFile(bgUrl, bgPath)
 
@@ -228,9 +258,10 @@ async function runAutoUpload(options = {}) {
       log(`[${i + 1}/${toUpload.length}] ✅ ${ytUrl}`)
 
       const entry = {
-        pixabayId:  track.pixabayId,
+        trackId:    track.trackId,
         category:   cat.id,
         title:      track.title,
+        artist:     track.artist,
         youtubeId:  result.id,
         youtubeUrl: ytUrl,
         uploadedAt: new Date().toISOString(),
@@ -242,7 +273,7 @@ async function runAutoUpload(options = {}) {
 
     } catch (e) {
       log(`[${i + 1}/${toUpload.length}] ❌ Error: ${e.message}`)
-      results.push({ pixabayId: track.pixabayId, error: e.message })
+      results.push({ trackId: track.trackId, error: e.message })
     } finally {
       for (const p of [audioPath, bgPath, outputPath]) {
         try { if (fs.existsSync(p)) fs.unlinkSync(p) } catch {}
@@ -283,8 +314,8 @@ function stopScheduler() {
 
 function triggerRun(source = 'manual') {
   if (isRunning) return { error: 'Ya hay una generación en curso' }
-  isRunning  = true
-  lastRunAt  = new Date().toISOString()
+  isRunning     = true
+  lastRunAt     = new Date().toISOString()
   lastRunResult = null
 
   const logs  = []
@@ -308,12 +339,13 @@ function triggerRun(source = 'manual') {
 
 function getSchedulerStatus() {
   return {
-    running:           isRunning,
+    running:          isRunning,
     lastRunAt,
     lastRunResult,
-    intervalHours:     parseFloat(process.env.AUTO_INTERVAL_HOURS || '6'),
-    categories:        (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient').split(','),
-    ytConfigured:      !!process.env.YOUTUBE_REFRESH_TOKEN,
+    intervalHours:    parseFloat(process.env.AUTO_INTERVAL_HOURS || '6'),
+    categories:       (process.env.MUSIC_CATEGORIES || 'sleep,study,focus,travel,ambient').split(','),
+    ytConfigured:     !!process.env.YOUTUBE_REFRESH_TOKEN,
+    jamendoConfigured: !!process.env.JAMENDO_CLIENT_ID,
     pixabayConfigured: !!process.env.PIXABAY_API_KEY,
   }
 }

@@ -21,8 +21,13 @@ services:
       - key: YOUTUBE_REFRESH_TOKEN
         sync: false
 
+      # Jamendo API — registro gratuito en developer.jamendo.com
+      # Fuente de música (Creative Commons)
+      - key: JAMENDO_CLIENT_ID
+        sync: false
+
       # Pixabay API — registro gratuito en pixabay.com/api/
-      # Misma clave sirve para música y videos de fondo
+      # Fuente de videos de fondo (naturaleza, paisajes, etc.)
       - key: PIXABAY_API_KEY
         sync: false
 
