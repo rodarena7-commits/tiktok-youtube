@@ -10,7 +10,7 @@ const https        = require('https')
 const http         = require('http')
 const fs           = require('fs')
 const path         = require('path')
-const { downloadFile, createVideo, getTempPath } = require('./downloader')
+const { downloadFile, createVideo, getTempPath, fmt, MB } = require('./downloader')
 const { uploadToYoutube }                        = require('./youtube')
 
 const HISTORY_FILE = path.join(__dirname, 'uploaded.json')
@@ -205,6 +205,9 @@ async function runAutoUpload(options = {}) {
   const toUpload    = newTracks.slice(0, maxPerRun)
   let uploadedCount = 0
   const results     = []
+  const runStart    = Date.now()
+
+  log(`📊 Total: ${toUpload.length} videos — estimado ~${fmt(toUpload.length * 5 * 60)} (5 min/video aprox.)`)
 
   for (let i = 0; i < toUpload.length; i++) {
     const track      = toUpload[i]
@@ -212,7 +215,10 @@ async function runAutoUpload(options = {}) {
     const jobId      = `${cat.id}_${track.trackId}`
     const safeTitle  = track.title.replace(/[<>:"\/\\|?*\n]/g, ' ').trim().slice(0, 60)
     const ytTitle    = `${cat.emoji} Música ${cat.label} - ${safeTitle} | Sin Derechos de Autor`
-    const dur        = `${Math.floor(track.duration / 60)}m${String(track.duration % 60).padStart(2, '0')}s`
+    const durStr     = fmt(track.duration)
+    const n          = toUpload.length
+    const pct        = i => `${Math.round(i / n * 100)}%`
+    const prefix     = `[${i + 1}/${n}]`
 
     const description = [
       ytTitle,
@@ -236,30 +242,65 @@ async function runAutoUpload(options = {}) {
     const bgPath     = getTempPath(jobId + '_bg', 'mp4')
     const outputPath = getTempPath(jobId + '_out', 'mp4')
 
+    log(``)
+    log(`${prefix} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+    log(`${prefix} ${cat.emoji}  "${safeTitle}"`)
+    log(`${prefix}     Artista: ${track.artist} | Duración: ${durStr}`)
+    log(`${prefix}     Progreso general: ${pct(i)} completado`)
+    log(`${prefix} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+
     try {
-      log(`[${i + 1}/${toUpload.length}] ${cat.emoji} "${safeTitle}" por ${track.artist} (${dur})`)
+      // ── Paso 1: Audio ───────────────────────────────────────
+      let t0 = Date.now()
+      log(`${prefix} [1/4] ⬇️  Descargando audio (${durStr} de música)...`)
+      await downloadFile(track.audioUrl, audioPath, ({ pct: p, receivedMB, totalMB, done }) => {
+        if (done) {
+          log(`${prefix} [1/4]      ✓ ${receivedMB}MB descargados en ${fmt((Date.now()-t0)/1000)}`)
+        } else {
+          log(`${prefix} [1/4]      ${p}% — ${receivedMB}MB / ${totalMB}MB`)
+        }
+      })
 
-      log(`[${i + 1}/${toUpload.length}] ⬇️  Descargando audio de Jamendo...`)
-      await downloadFile(track.audioUrl, audioPath)
-
-      log(`[${i + 1}/${toUpload.length}] 🎬  Obteniendo video de fondo de Pixabay...`)
+      // ── Paso 2: Fondo ───────────────────────────────────────
+      t0 = Date.now()
+      log(`${prefix} [2/4] 🎬  Descargando video de fondo de Pixabay...`)
       const bgUrl = await fetchBackgroundVideoUrl(cat)
-      await downloadFile(bgUrl, bgPath)
+      await downloadFile(bgUrl, bgPath, ({ pct: p, receivedMB, totalMB, done }) => {
+        if (done) {
+          log(`${prefix} [2/4]      ✓ ${receivedMB}MB descargados en ${fmt((Date.now()-t0)/1000)}`)
+        } else {
+          log(`${prefix} [2/4]      ${p}% — ${receivedMB}MB / ${totalMB}MB`)
+        }
+      })
 
-      log(`[${i + 1}/${toUpload.length}] 🎞️  Creando video con FFmpeg...`)
-      await createVideo(audioPath, bgPath, outputPath)
+      // ── Paso 3: FFmpeg ──────────────────────────────────────
+      t0 = Date.now()
+      log(`${prefix} [3/4] 🎞️  Creando video con FFmpeg (854×480, AAC 128k)...`)
+      await createVideo(audioPath, bgPath, outputPath, track.duration, ({ pct: p, elapsed, remaining, done }) => {
+        if (done) {
+          log(`${prefix} [3/4]      ✓ Video creado en ${fmt(elapsed)}`)
+        } else {
+          const remStr = remaining ? ` — ~${fmt(remaining)} restantes` : ''
+          log(`${prefix} [3/4]      ${p}%${remStr} (${fmt(elapsed)} transcurridos)`)
+        }
+      })
 
-      log(`[${i + 1}/${toUpload.length}] ⬆️  Subiendo a YouTube...`)
+      // ── Paso 4: YouTube ─────────────────────────────────────
+      t0 = Date.now()
+      log(`${prefix} [4/4] ⬆️  Subiendo a YouTube...`)
       const result = await uploadToYoutube({
         videoPath:   outputPath,
         title:       ytTitle.slice(0, 100),
         description,
         tags:        cat.tags,
         privacy,
+        onProgress:  p => log(`${prefix} [4/4]      Subida: ${p}%`),
       })
 
       const ytUrl = `https://www.youtube.com/watch?v=${result.id}`
-      log(`[${i + 1}/${toUpload.length}] ✅ ${ytUrl}`)
+      const total  = fmt((Date.now() - runStart) / 1000)
+      log(`${prefix} ✅ Subido en ${fmt((Date.now()-t0)/1000)} → ${ytUrl}`)
+      log(`${prefix}    Tiempo total del run: ${total}`)
 
       const entry = {
         trackId:    track.trackId,
@@ -276,9 +317,8 @@ async function runAutoUpload(options = {}) {
       uploadedCount++
 
     } catch (e) {
-      log(`[${i + 1}/${toUpload.length}] ❌ Error: ${e.message}`)
+      log(`${prefix} ❌ Error: ${e.message}`)
       results.push({ trackId: track.trackId, error: e.message })
-      // Guardar en lista separada "skipped" para no reintentar tracks con descarga bloqueada
       if (e.message.includes('HTTP 500') || e.message.includes('HTTP 403') || e.message.includes('HTTP 404')) {
         if (!history.skipped) history.skipped = []
         history.skipped.push({ trackId: track.trackId, skipReason: e.message, skippedAt: new Date().toISOString() })
@@ -291,9 +331,13 @@ async function runAutoUpload(options = {}) {
     }
 
     if (i < toUpload.length - 1) {
+      log(`${prefix} ⏳ Pausa de 10s antes del siguiente video...`)
       await new Promise(r => setTimeout(r, 10000))
     }
   }
+
+  log(``)
+  log(`🏁 Run finalizado en ${fmt((Date.now()-runStart)/1000)} — ${uploadedCount}/${toUpload.length} subidos`)
 
   return {
     uploaded: uploadedCount,
