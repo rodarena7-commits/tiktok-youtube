@@ -178,8 +178,11 @@
       tbody.innerHTML = videos.map(v => {
         const d       = new Date(v.uploadedAt)
         const dateStr = d.toLocaleDateString('es-AR', { day:'2-digit', month:'short', year:'numeric' })
+        const link = v.youtubeUrl && v.youtubeUrl !== 'undefined'
+          ? `<a href="${v.youtubeUrl}" target="_blank">${esc(v.title)}</a>`
+          : esc(v.title)
         return `<tr>
-          <td><a href="${v.youtubeUrl}" target="_blank">${esc(v.title)}</a></td>
+          <td>${link}</td>
           <td><span class="cat-badge">${CAT_LABELS[v.category] || v.category}</span></td>
           <td style="color:#64748b;white-space:nowrap">${dateStr}</td>
         </tr>`

@@ -147,7 +147,7 @@ async function fetchBackgroundVideoUrl(cat) {
 // ── Historial ────────────────────────────────────────────────
 function loadHistory() {
   try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) }
-  catch { return { uploaded: [] } }
+  catch { return { uploaded: [], skipped: [] } }
 }
 
 function saveHistory(history) {
@@ -174,7 +174,10 @@ async function runAutoUpload(options = {}) {
     .split(',').map(s => s.trim()).filter(Boolean)
 
   const history     = loadHistory()
-  const uploadedIds = new Set(history.uploaded.map(v => v.trackId))
+  const uploadedIds = new Set([
+    ...history.uploaded.map(v => v.trackId),
+    ...(history.skipped || []).map(v => v.trackId),
+  ])
 
   log(`🎵 Buscando música en Jamendo (${enabledCats.length} categorías)...`)
 
@@ -275,17 +278,10 @@ async function runAutoUpload(options = {}) {
     } catch (e) {
       log(`[${i + 1}/${toUpload.length}] ❌ Error: ${e.message}`)
       results.push({ trackId: track.trackId, error: e.message })
-      // Guardar en historial como "skipped" para no reintentar tracks con descarga bloqueada
+      // Guardar en lista separada "skipped" para no reintentar tracks con descarga bloqueada
       if (e.message.includes('HTTP 500') || e.message.includes('HTTP 403') || e.message.includes('HTTP 404')) {
-        history.uploaded.push({
-          trackId:    track.trackId,
-          category:   cat.id,
-          title:      track.title,
-          artist:     track.artist,
-          skipped:    true,
-          skipReason: e.message,
-          uploadedAt: new Date().toISOString(),
-        })
+        if (!history.skipped) history.skipped = []
+        history.skipped.push({ trackId: track.trackId, skipReason: e.message, skippedAt: new Date().toISOString() })
         saveHistory(history)
       }
     } finally {

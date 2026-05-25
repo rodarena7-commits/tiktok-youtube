@@ -75,7 +75,8 @@ app.post('/auto/run', (req, res) => {
 // ── Historial de videos subidos ──────────────────────────────
 app.get('/auto/history', (req, res) => {
   const history = loadHistory()
-  const sorted  = [...history.uploaded].reverse()
+  // Solo devolver los que tienen youtubeUrl válida (excluye skipped)
+  const sorted  = [...history.uploaded].filter(v => v.youtubeUrl).reverse()
   res.json({ total: sorted.length, videos: sorted })
 })
 
